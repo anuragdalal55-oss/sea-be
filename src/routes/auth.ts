@@ -15,7 +15,9 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
   }
   try {
     const result = await pool.query(
-      `SELECT u.*, p.profile_code, p.company_name, p.customs_house_code, p.carn_number
+      `SELECT u.*, p.profile_code, p.company_name,
+              COALESCE(u.customs_house_code, p.customs_house_code) as customs_house_code,
+              p.carn_number
        FROM users u
        LEFT JOIN profiles p ON u.profile_id = p.id
        WHERE u.username = $1 AND u.is_active = TRUE`,

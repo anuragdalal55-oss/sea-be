@@ -10,7 +10,8 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "prebuild": "rm -rf dist"
+    "prebuild": "rm -rf dist",
+    "seed": "ts-node src/seeder.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

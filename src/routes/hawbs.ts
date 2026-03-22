@@ -2,33 +2,66 @@ import { Router, Response } from 'express';
 import pool from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
 
+const toNumOrNull = (v: any) => (v !== '' && v !== null && v !== undefined ? Number(v) : null);
+
 const router = Router();
 router.use(authenticate);
 
-// List HAWBs (optionally filtered by mawb_id)
+// List HAWBs (server-side pagination, optionally filtered by mawb_id / search)
 router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
-  const { mawb_id } = req.query;
+  const { mawb_id, search } = req.query;
+  const page     = Math.max(1, parseInt(String(req.query.page     || '1')));
+  const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || '25'))));
+  const offset   = (page - 1) * pageSize;
+
   try {
-    let query = `SELECT h.*, m.mawb_no FROM hawbs h LEFT JOIN mawbs m ON h.mawb_id = m.id`;
     const params: any[] = [];
+    const conditions: string[] = [];
+
     if (mawb_id) {
-      query += ' WHERE h.mawb_id = $1';
+      conditions.push(`h.mawb_id = $${params.length + 1}`);
       params.push(mawb_id);
     }
-    query += ' ORDER BY h.created_at DESC';
-    const result = await pool.query(query, params);
-    res.json(result.rows);
+    if (search) {
+      conditions.push(`(h.hawb_no ILIKE $${params.length + 1} OR h.origin ILIKE $${params.length + 1})`);
+      params.push(`%${search}%`);
+    }
+
+    const where = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM hawbs h${where}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    const limitIdx  = params.length + 1;
+    const offsetIdx = params.length + 2;
+
+    const result = await pool.query(
+      `SELECT h.*, m.mawb_no, m.message_type as mawb_message_type,
+              m.origin as mawb_origin, m.destination as mawb_destination
+       FROM hawbs h LEFT JOIN mawbs m ON h.mawb_id = m.id
+       ${where}
+       ORDER BY h.created_at DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      [...params, pageSize, offset]
+    );
+
+    res.json({ data: result.rows, total, page, pageSize });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
 // Get single HAWB
-router.get('/:id', async (_req: AuthRequest, res: Response): Promise<void> => {
+router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await pool.query(
-      `SELECT h.*, m.mawb_no FROM hawbs h LEFT JOIN mawbs m ON h.mawb_id = m.id WHERE h.id = $1`,
-      [_req.params.id]
+      `SELECT h.*, m.mawb_no, m.message_type as mawb_message_type,
+              m.origin as mawb_origin, m.destination as mawb_destination
+       FROM hawbs h LEFT JOIN mawbs m ON h.mawb_id = m.id WHERE h.id = $1`,
+      [req.params.id]
     );
     if (result.rows.length === 0) { res.status(404).json({ message: 'Not found' }); return; }
     res.json(result.rows[0]);
@@ -37,32 +70,25 @@ router.get('/:id', async (_req: AuthRequest, res: Response): Promise<void> => {
   }
 });
 
-// Create HAWB
+// Create single HAWB
 router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
-  const {
-    mawb_id, hawb_no, hawb_date, origin, destination,
-    shipment_type, total_packages, gross_weight, item_description,
-    consignee_name, consignee_address, shipper_name, shipper_address, profile_id
-  } = req.body;
+  const { mawb_id, hawb_no, origin, destination, total_packages, gross_weight, item_description } = req.body;
   if (!mawb_id || !hawb_no || !origin || !destination) {
     res.status(400).json({ message: 'mawb_id, hawb_no, origin, destination required' });
     return;
   }
   try {
-
-    console.log('req.user', req.user);
-    
-
-    // const proileId = await pool.query('SELECT id FROM profiles WHERE profile_id = $1', [req.user?.profile_id]);
+    const mawbResult = await pool.query('SELECT message_type, origin, destination FROM mawbs WHERE id = $1', [mawb_id]);
+    if (mawbResult.rows.length === 0) { res.status(404).json({ message: 'MAWB not found' }); return; }
+    const mawb = mawbResult.rows[0];
 
     const result = await pool.query(
-      `INSERT INTO hawbs (mawb_id, hawb_no, hawb_date, origin, destination,
-        shipment_type, total_packages, gross_weight, item_description,
-        consignee_name, consignee_address, shipper_name, shipper_address, profile_id, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [mawb_id, hawb_no, hawb_date, origin, destination,
-       shipment_type || 'T', total_packages, gross_weight, item_description,
-       consignee_name, consignee_address, shipper_name, shipper_address, req.user?.profile_id, req.user?.id]
+      `INSERT INTO hawbs (mawb_id, hawb_no, origin, destination, shipment_type,
+        total_packages, gross_weight, item_description, profile_id, created_by, message_type)
+       VALUES ($1,$2,$3,$4,'T',$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [mawb_id, hawb_no, origin || mawb.origin, destination || mawb.destination,
+       toNumOrNull(total_packages) || 0, toNumOrNull(gross_weight) || 0,
+       item_description || null, req.user?.profile_id, req.user?.id, mawb.message_type || 'F']
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -71,22 +97,57 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
   }
 });
 
-// Update HAWB
+// Create multiple HAWBs at once (batch)
+router.post('/batch', async (req: AuthRequest, res: Response): Promise<void> => {
+  const { mawb_id, hawbs } = req.body;
+  if (!mawb_id || !hawbs || !Array.isArray(hawbs) || hawbs.length === 0) {
+    res.status(400).json({ message: 'mawb_id and hawbs array required' });
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    const mawbResult = await client.query(
+      'SELECT message_type, origin, destination FROM mawbs WHERE id = $1', [mawb_id]
+    );
+    if (mawbResult.rows.length === 0) { res.status(404).json({ message: 'MAWB not found' }); return; }
+    const mawb = mawbResult.rows[0];
+
+    await client.query('BEGIN');
+    const created = [];
+    for (const h of hawbs) {
+      if (!h.hawb_no || String(h.hawb_no).trim() === '') continue;
+      const r = await client.query(
+        `INSERT INTO hawbs (mawb_id, hawb_no, origin, destination, shipment_type,
+          total_packages, gross_weight, item_description, profile_id, created_by, message_type)
+         VALUES ($1,$2,$3,$4,'T',$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [mawb_id, h.hawb_no, h.origin || mawb.origin, h.destination || mawb.destination,
+         toNumOrNull(h.total_packages) || 0, toNumOrNull(h.gross_weight) || 0,
+         h.item_description || null, req.user?.profile_id, req.user?.id, mawb.message_type || 'F']
+      );
+      created.push(r.rows[0]);
+    }
+    await client.query('COMMIT');
+    res.status(201).json(created);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Edit HAWB (update existing, MAWB unchanged)
 router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
-  const {
-    hawb_no, hawb_date, origin, destination, shipment_type,
-    total_packages, gross_weight, item_description,
-    consignee_name, consignee_address, shipper_name, shipper_address
-  } = req.body;
+  const { hawb_no, origin, destination, total_packages, gross_weight, item_description } = req.body;
   try {
     const result = await pool.query(
-      `UPDATE hawbs SET hawb_no=$1, hawb_date=$2, origin=$3, destination=$4, shipment_type=$5,
-       total_packages=$6, gross_weight=$7, item_description=$8,
-       consignee_name=$9, consignee_address=$10, shipper_name=$11, shipper_address=$12, updated_at=NOW()
-       WHERE id=$13 RETURNING *`,
-      [hawb_no, hawb_date, origin, destination, shipment_type,
-       total_packages, gross_weight, item_description,
-       consignee_name, consignee_address, shipper_name, shipper_address, req.params.id]
+      `UPDATE hawbs SET hawb_no=$1, origin=$2, destination=$3,
+       total_packages=$4, gross_weight=$5, item_description=$6, updated_at=NOW()
+       WHERE id=$7 RETURNING *`,
+      [hawb_no, origin, destination,
+       toNumOrNull(total_packages) || 0, toNumOrNull(gross_weight) || 0,
+       item_description || null, req.params.id]
     );
     res.json(result.rows[0]);
   } catch (err) {
@@ -94,7 +155,73 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   }
 });
 
-// Delete HAWB
+// Amend HAWB – creates new HAWB record with message_type='A' linked to amended MAWB
+router.post('/amend/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const orig = await pool.query(
+      `SELECT h.*, m.mawb_no FROM hawbs h LEFT JOIN mawbs m ON h.mawb_id = m.id WHERE h.id = $1`,
+      [req.params.id]
+    );
+    if (orig.rows.length === 0) { res.status(404).json({ message: 'HAWB not found' }); return; }
+    const h = orig.rows[0];
+    const { mawb_id, origin, destination, total_packages, gross_weight, item_description } = req.body;
+
+    const result = await pool.query(
+      `INSERT INTO hawbs (mawb_id, hawb_no, origin, destination, shipment_type,
+        total_packages, gross_weight, item_description, profile_id, created_by,
+        message_type, parent_hawb_id)
+       VALUES ($1,$2,$3,$4,'T',$5,$6,$7,$8,$9,'A',$10) RETURNING *`,
+      [mawb_id || h.mawb_id, h.hawb_no,
+       origin || h.origin, destination || h.destination,
+       toNumOrNull(total_packages) !== null ? toNumOrNull(total_packages) : h.total_packages,
+       toNumOrNull(gross_weight) !== null ? toNumOrNull(gross_weight) : parseFloat(h.gross_weight),
+       item_description !== undefined ? item_description : h.item_description,
+       req.user?.profile_id, req.user?.id, h.id]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get checklist data: MAWBs with their HAWBs for a profile/location
+router.get('/checklist/data', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { customs_house_code, mawb_id } = req.query;
+    let mawbQuery = `SELECT m.*, p.profile_code, p.pan_number,
+                       (SELECT COUNT(*) FROM hawbs h WHERE h.mawb_id = m.id) as hawb_count
+                     FROM mawbs m LEFT JOIN profiles p ON m.profile_id = p.id
+                     WHERE 1=1`;
+    const params: any[] = [];
+    // When a specific MAWB is requested, show it regardless of transmission status
+    if (mawb_id) {
+      mawbQuery += ` AND m.id = $${params.length + 1}`;
+      params.push(mawb_id);
+    } else {
+      mawbQuery += ` AND m.transmission_date IS NOT NULL`;
+    }
+    if (customs_house_code) {
+      mawbQuery += ` AND (m.customs_house_code = $${params.length + 1} OR p.customs_house_code = $${params.length + 1})`;
+      params.push(customs_house_code);
+    }
+    mawbQuery += ' ORDER BY m.transmission_date DESC LIMIT 50';
+    const mawbs = await pool.query(mawbQuery, params);
+
+    const result = [];
+    for (const mawb of mawbs.rows) {
+      const hawbs = await pool.query(
+        'SELECT * FROM hawbs WHERE mawb_id = $1 ORDER BY created_at ASC', [mawb.id]
+      );
+      result.push({ ...mawb, hawbs: hawbs.rows });
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Delete HAWB (permanent)
 router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     await pool.query('DELETE FROM hawbs WHERE id = $1', [req.params.id]);

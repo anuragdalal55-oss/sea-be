@@ -6,11 +6,12 @@ import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 const router = Router();
 router.use(authenticate);
 
-// List users (admin+)
+// List users (admin+) — includes password_plain for admin display
 router.get('/', requireRole(['master_admin', 'admin']), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await pool.query(
       `SELECT u.id, u.username, u.full_name, u.email, u.role, u.is_active, u.created_at,
+              u.password_plain,
               p.profile_code, p.company_name
        FROM users u LEFT JOIN profiles p ON u.profile_id = p.id
        ORDER BY u.created_at DESC`
@@ -36,9 +37,9 @@ router.post('/register', requireRole(['master_admin', 'admin']), async (req: Aut
   try {
     const hash = await bcrypt.hash(password, 10);
     const result = await pool.query(
-      `INSERT INTO users (username, password_hash, full_name, email, role, profile_id)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, username, full_name, role`,
-      [username, hash, full_name, email, role || 'user', profile_id]
+      `INSERT INTO users (username, password_hash, password_plain, full_name, email, role, profile_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, username, full_name, role`,
+      [username, hash, password, full_name, email, role || 'user', profile_id]
     );
     res.status(201).json(result.rows[0]);
   } catch (err: any) {
@@ -60,6 +61,39 @@ router.put('/:id', requireRole(['master_admin', 'admin']), async (req: AuthReque
       [full_name, email, role, is_active, profile_id, req.params.id]
     );
     res.json({ message: 'Updated' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Update user's customs house location
+router.put('/:id/location', requireRole(['master_admin', 'admin']), async (req: AuthRequest, res: Response): Promise<void> => {
+  const { customs_house_code } = req.body;
+  try {
+    await pool.query(
+      `UPDATE users SET customs_house_code=$1, updated_at=NOW() WHERE id=$2`,
+      [customs_house_code || null, req.params.id]
+    );
+    res.json({ message: 'Location updated' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Admin reset password for any user
+router.put('/:id/reset-password', requireRole(['master_admin', 'admin']), async (req: AuthRequest, res: Response): Promise<void> => {
+  const { new_password } = req.body;
+  if (!new_password || new_password.length < 6) {
+    res.status(400).json({ message: 'Password must be at least 6 characters' });
+    return;
+  }
+  try {
+    const hash = await bcrypt.hash(new_password, 10);
+    await pool.query(
+      'UPDATE users SET password_hash=$1, password_plain=$2, updated_at=NOW() WHERE id=$3',
+      [hash, new_password, req.params.id]
+    );
+    res.json({ message: 'Password reset successfully' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }

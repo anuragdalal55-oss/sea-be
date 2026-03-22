@@ -1,28 +1,28 @@
 /**
  * ICES 1.5 CGM (Consol General Manifest) File Generator
  * Format: CMCHI01 - Consol Manifest message
- * Field delimiter: ASCII 28 (^\])
+ * Field delimiter: ASCII 28 (^])
  * Record delimiter: newline (ASCII 10)
  */
 
-const FS = '\x1c'; // ASCII 28 - field separator (^])
+const FS = '\x1c'; // ASCII 28 - field separator
 
 export interface MawbData {
-  carn_number: string;         // Consol Agent ID (16-char CARN/PAN-based)
-  customs_house_code: string;  // e.g. INDEL4
-  igm_no?: string;
-  igm_date?: string;           // DDMMYYYY
-  flight_no?: string;
-  flight_origin_date?: string; // DDMMYYYY
-  mawb_no: string;
-  mawb_date?: string;          // DDMMYYYY
-  origin: string;              // Port of Origin (3-letter IATA)
-  destination: string;         // Port of Destination (3-letter IATA)
-  shipment_type: string;       // T/P/S
-  total_packages: number;
-  gross_weight: number;
-  item_description: string;
-  message_type?: string;       // F/A/D (default F)
+  carn_number: string;         // Consol Agent ID (PAN-based, field 2 of consmaster)
+  customs_house_code: string;  // e.g. INBOM4 (field 3)
+  igm_no?: string;             // field 4
+  igm_date?: string;           // field 5 DDMMYYYY
+  flight_no?: string;          // field 6
+  flight_origin_date?: string; // field 7 DDMMYYYY
+  mawb_no: string;             // field 8
+  mawb_date?: string;          // field 9
+  origin: string;              // field 10 (3-letter IATA)
+  destination: string;         // field 11
+  shipment_type: string;       // field 12 T/P/S
+  total_packages: number;      // field 13
+  gross_weight: number;        // field 14 (KGS)
+  item_description: string;    // field 15 (always CONSOL)
+  message_type?: string;       // F/A/D
 }
 
 export interface HawbData {
@@ -34,21 +34,21 @@ export interface HawbData {
   flight_origin_date?: string;
   mawb_no: string;
   mawb_date?: string;
-  hawb_no: string;
-  hawb_date?: string;
-  origin: string;
-  destination: string;
-  shipment_type: string;
-  total_packages: number;
-  gross_weight: number;
-  item_description: string;
+  hawb_no: string;             // field 10
+  hawb_date?: string;          // field 11
+  origin: string;              // field 12
+  destination: string;         // field 13
+  shipment_type: string;       // field 14
+  total_packages: number;      // field 15
+  gross_weight: number;        // field 16
+  item_description: string;    // field 17
   message_type?: string;
 }
 
 export interface GenerateOptions {
-  senderCode?: string;
-  receiverCode?: string;
-  controlNumber?: string;
+  senderCode?: string;    // HREC sender (consol_agent_id / icegate_code)
+  receiverCode?: string;  // HREC receiver (customs_house_code)
+  controlNumber?: string; // UserPrefix + sequence e.g. EMU5880
   testMode?: boolean;
 }
 
@@ -71,6 +71,8 @@ function now(): { date: string; time: string } {
 
 /**
  * Generate ICES 1.5 CGM file content for CONSOL manifest (CMCHI01)
+ * Matches format:
+ * HREC^]ZZ^]<Sender>^]ZZ^]<Receiver>^]ICES1_5^]P^]^]CMCHI01^]<CtrlNo>^]<Date>^]<Time>
  */
 export function generateCGM(
   mawb: MawbData,
@@ -78,15 +80,18 @@ export function generateCGM(
   options: GenerateOptions = {}
 ): string {
   const { date, time } = now();
-  const controlNo = options.controlNumber || Date.now().toString().slice(-8);
+  const controlNo = options.controlNumber || Date.now().toString().slice(-6);
   const mode = options.testMode ? 'T' : 'P';
   const sender = options.senderCode || '';
-  const receiver = options.receiverCode || '';
+  const receiver = options.receiverCode || mawb.customs_house_code;
 
-  // ICEGATE Header
-  const header = `HREC${FS}ZZ${FS}${sender}${FS}ZZ${FS}${receiver}${FS}ICES1_5${FS}${mode}${FS}${FS}CMCHI01${FS}${controlNo}${FS}${date}${FS}${time}`;
+  // ICEGATE Header line (HREC)
+  const header = [
+    'HREC', 'ZZ', sender, 'ZZ', receiver,
+    'ICES1_5', mode, '', 'CMCHI01', controlNo, date, time
+  ].join(FS);
 
-  // Consol Master line
+  // Consol Master line (consmaster - 15 fields)
   const m = mawb;
   const msgType = m.message_type || 'F';
   const masterLine = [
@@ -104,10 +109,10 @@ export function generateCGM(
     m.shipment_type || 'T',
     String(m.total_packages),
     m.gross_weight.toFixed(2),
-    m.item_description,
+    m.item_description || 'CONSOL',
   ].join(FS);
 
-  // House lines
+  // House lines (conshouse - 17 fields each)
   const houseLines = hawbs.map(h => {
     const hMsgType = h.message_type || 'F';
     return [
@@ -131,7 +136,6 @@ export function generateCGM(
     ].join(FS);
   }).join('\n');
 
-  // Assemble full file
   const content = [
     header,
     '<consoligm>',
@@ -149,10 +153,18 @@ export function generateCGM(
 }
 
 /**
- * Generate filename per ICES 1.5 naming convention
- * Format: <CustomsHouseCode><ConsolAgentCode><UniqueNo>.cgm
+ * Generate CGM filename:
+ * Format: <CustomsHouseCode><PanNumber><CompanyPrefix><ControlNum>.cgm
+ * e.g. INBOM4AAACE3803EEMU5880.cgm
  */
-export function generateCGMFileName(customsHouseCode: string, consolAgentCode: string): string {
-  const unique = Date.now().toString().slice(-6);
-  return `${customsHouseCode}${consolAgentCode}${unique}.cgm`;
+export function generateCGMFileName(
+  customsHouseCode: string,
+  panNumber: string,
+  companyPrefix: string,
+  controlNum: number
+): string {
+  const pan = panNumber.substring(0, 10).toUpperCase();
+  const pfx = companyPrefix.replace(/\s+/g, '').substring(0, 3).toUpperCase();
+  const seq = String(controlNum).padStart(4, '0');
+  return `${customsHouseCode}${pan}${pfx}${seq}.cgm`;
 }
