@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import pool from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { logger } from '../utils/logger';
 
 const toNumOrNull = (v: any) => (v !== '' && v !== null && v !== undefined ? Number(v) : null);
 
@@ -13,6 +14,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
   const page     = Math.max(1, parseInt(String(req.query.page     || '1')));
   const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || '25'))));
   const offset   = (page - 1) * pageSize;
+  const isAdmin  = req.user?.role === 'master_admin' || req.user?.role === 'admin';
 
   try {
     const params: any[] = [];
@@ -25,6 +27,11 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     if (search) {
       conditions.push(`(h.hawb_no ILIKE $${params.length + 1} OR h.origin ILIKE $${params.length + 1})`);
       params.push(`%${search}%`);
+    }
+    // Non-admins see only their own HAWBs
+    if (!isAdmin) {
+      conditions.push(`h.created_by = $${params.length + 1}`);
+      params.push(req.user?.id);
     }
 
     const where = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
@@ -50,6 +57,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
 
     res.json({ data: result.rows, total, page, pageSize });
   } catch (err) {
+    logger.error('HAWBS', 'GET / error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -66,6 +74,7 @@ router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     if (result.rows.length === 0) { res.status(404).json({ message: 'Not found' }); return; }
     res.json(result.rows[0]);
   } catch (err) {
+    logger.error('HAWBS', `GET /${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -90,9 +99,10 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
        toNumOrNull(total_packages) || 0, toNumOrNull(gross_weight) || 0,
        item_description || null, req.user?.profile_id, req.user?.id, mawb.message_type || 'F']
     );
+    logger.info('HAWBS', `Created HAWB: ${hawb_no} in mawb_id=${mawb_id} by user=${req.user?.id}`);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    logger.error('HAWBS', `POST / create error (hawb_no=${req.body.hawb_no})`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -127,10 +137,11 @@ router.post('/batch', async (req: AuthRequest, res: Response): Promise<void> => 
       created.push(r.rows[0]);
     }
     await client.query('COMMIT');
+    logger.info('HAWBS', `Batch created ${created.length} HAWBs in mawb_id=${mawb_id} by user=${req.user?.id}`);
     res.status(201).json(created);
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error(err);
+    logger.error('HAWBS', `POST /batch error (mawb_id=${req.body.mawb_id})`, err);
     res.status(500).json({ message: 'Server error' });
   } finally {
     client.release();
@@ -151,6 +162,7 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     );
     res.json(result.rows[0]);
   } catch (err) {
+    logger.error('HAWBS', `PUT /${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -178,9 +190,10 @@ router.post('/amend/:id', async (req: AuthRequest, res: Response): Promise<void>
        item_description !== undefined ? item_description : h.item_description,
        req.user?.profile_id, req.user?.id, h.id]
     );
+    logger.info('HAWBS', `Amended HAWB id=${req.params.id} by user=${req.user?.id}`);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    logger.error('HAWBS', `POST /amend/${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -189,6 +202,7 @@ router.post('/amend/:id', async (req: AuthRequest, res: Response): Promise<void>
 router.get('/checklist/data', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { customs_house_code, mawb_id } = req.query;
+    const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
     let mawbQuery = `SELECT m.*, p.profile_code, p.pan_number,
                        (SELECT COUNT(*) FROM hawbs h WHERE h.mawb_id = m.id) as hawb_count
                      FROM mawbs m LEFT JOIN profiles p ON m.profile_id = p.id
@@ -205,6 +219,11 @@ router.get('/checklist/data', async (req: AuthRequest, res: Response): Promise<v
       mawbQuery += ` AND (m.customs_house_code = $${params.length + 1} OR p.customs_house_code = $${params.length + 1})`;
       params.push(customs_house_code);
     }
+    // Non-admins see only their own MAWBs in checklist
+    if (!isAdmin) {
+      mawbQuery += ` AND m.created_by = $${params.length + 1}`;
+      params.push(req.user?.id);
+    }
     mawbQuery += ' ORDER BY m.transmission_date DESC LIMIT 50';
     const mawbs = await pool.query(mawbQuery, params);
 
@@ -217,6 +236,7 @@ router.get('/checklist/data', async (req: AuthRequest, res: Response): Promise<v
     }
     res.json(result);
   } catch (err) {
+    logger.error('HAWBS', 'GET /checklist/data error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -225,8 +245,10 @@ router.get('/checklist/data', async (req: AuthRequest, res: Response): Promise<v
 router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     await pool.query('DELETE FROM hawbs WHERE id = $1', [req.params.id]);
+    logger.info('HAWBS', `Deleted HAWB id=${req.params.id} by user=${req.user?.id}`);
     res.json({ message: 'Deleted' });
   } catch (err) {
+    logger.error('HAWBS', `DELETE /${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });

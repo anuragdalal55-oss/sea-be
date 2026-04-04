@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import pool from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { generateCGM, generateCGMFileName, MawbData, HawbData } from '../utils/cgmGenerator';
+import { logger } from '../utils/logger';
 
 const router = Router();
 router.use(authenticate);
@@ -51,13 +52,17 @@ router.post('/generate-cgm/:mawbId', async (req: AuthRequest, res: Response): Pr
       [req.params.mawbId]
     );
 
-    const customsCode = mawbRow.customs_house_code || mawbRow.p_customs_code || 'INXXX4';
+    // Auto-derive customs house code: IN{DEST3}4 (e.g. DEL → INDEL4)
+    const dest3 = (mawbRow.destination || '').trim().substring(0, 3).toUpperCase();
+    const derivedChc = dest3.length === 3 ? `IN${dest3}4` : '';
+    const customsCode = (mawbRow.customs_house_code || mawbRow.p_customs_code || derivedChc || '').trim();
     const locationCode = mawbRow.p_location || customsCode;
     // Consol Agent ID for consmaster/conshouse field 2 (PAN-based, max 16 chars)
-    const consolAgentId = mawbRow.pan_number || mawbRow.carn_number || '';
-    // Sender ID for HREC (full consol agent registration code)
-    const senderCode = mawbRow.consol_agent_id || mawbRow.icegate_code || mawbRow.carn_number || '';
-    const userPrefix = mawbRow.user_prefix || '';
+    const consolAgentId = (mawbRow.pan_number || mawbRow.carn_number || '').trim();
+    // Sender ID for HREC — icegate_code preferred, fallback to consol_agent_id / carn_number
+    const senderCode = (mawbRow.icegate_code || mawbRow.consol_agent_id || mawbRow.carn_number || '').trim();
+    // Username prefix: first 3 chars of username in uppercase
+    const userPrefix = (req.user?.username?.substring(0, 3).toUpperCase() || '').trim();
 
     // Get control number
     const profileId = mawbRow.profile_id;
@@ -113,8 +118,8 @@ router.post('/generate-cgm/:mawbId', async (req: AuthRequest, res: Response): Pr
     });
 
     // Build filename: CustomsCode + PAN + UserPrefix + ControlNum + .cgm
-    const panStr = (mawbRow.pan_number || mawbRow.carn_number || 'XXXXXXXXXX').substring(0, 10).toUpperCase();
-    const companyPrefix = (mawbRow.company_name || 'XXX').replace(/\s+/g, '').substring(0, 3).toUpperCase();
+    const panStr = (mawbRow.pan_number || mawbRow.carn_number || '').substring(0, 10).toUpperCase();
+    const companyPrefix = userPrefix || (mawbRow.company_name || '').replace(/\s+/g, '').substring(0, 3).toUpperCase();
     const fileName = generateCGMFileName(customsCode, panStr, companyPrefix, controlNum);
 
     // Save transmission record
@@ -130,11 +135,10 @@ router.post('/generate-cgm/:mawbId', async (req: AuthRequest, res: Response): Pr
       ['transmitted', req.params.mawbId]
     );
 
-    res.setHeader('Content-Type', 'text/plain');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-    res.send(fileContent);
+    logger.info('TRANSMISSIONS', `CGM generated: ${fileName} for mawb_id=${req.params.mawbId} by user=${req.user?.id}`);
+    res.json({ fileName, fileContent });
   } catch (err) {
-    console.error(err);
+    logger.error('TRANSMISSIONS', `POST /generate-cgm/${req.params.mawbId} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -153,10 +157,12 @@ router.get('/preview-cgm/:mawbId', async (req: AuthRequest, res: Response): Prom
     const mawbRow = mawbResult.rows[0];
     const hawbResult = await pool.query('SELECT * FROM hawbs WHERE mawb_id = $1', [req.params.mawbId]);
 
-    const customsCode = mawbRow.customs_house_code || mawbRow.p_customs_code || 'INXXX4';
-    const consolAgentId = mawbRow.pan_number || mawbRow.carn_number || '';
-    const senderCode = mawbRow.consol_agent_id || mawbRow.icegate_code || mawbRow.carn_number || '';
-    const userPrefix = mawbRow.user_prefix || '';
+    const dest3p = (mawbRow.destination || '').trim().substring(0, 3).toUpperCase();
+    const derivedChcP = dest3p.length === 3 ? `IN${dest3p}4` : '';
+    const customsCode = (mawbRow.customs_house_code || mawbRow.p_customs_code || derivedChcP || '').trim();
+    const consolAgentId = (mawbRow.pan_number || mawbRow.carn_number || '').trim();
+    const senderCode = (mawbRow.icegate_code || mawbRow.consol_agent_id || mawbRow.carn_number || '').trim();
+    const userPrefix = (req.user?.username?.substring(0, 3).toUpperCase() || '').trim();
     const controlNumber = `${userPrefix}PREVIEW`;
 
     const mawbData: MawbData = {
@@ -185,30 +191,57 @@ router.get('/preview-cgm/:mawbId', async (req: AuthRequest, res: Response): Prom
     const fileContent = generateCGM(mawbData, hawbData, {
       senderCode, receiverCode: customsCode, controlNumber, testMode: false,
     });
-    const panStr = (mawbRow.pan_number || mawbRow.carn_number || 'XXXXXXXXXX').substring(0, 10).toUpperCase();
-    const companyPrefix = (mawbRow.company_name || 'XXX').replace(/\s+/g, '').substring(0, 3).toUpperCase();
+    const panStr = (mawbRow.pan_number || mawbRow.carn_number || '').substring(0, 10).toUpperCase();
+    const companyPrefix = userPrefix || (mawbRow.company_name || '').replace(/\s+/g, '').substring(0, 3).toUpperCase();
     const fileName = generateCGMFileName(customsCode, panStr, companyPrefix, 0);
     res.json({ file_name: fileName, content: fileContent, hawb_count: hawbResult.rows.length });
   } catch (err) {
+    logger.error('TRANSMISSIONS', `GET /preview-cgm/${req.params.mawbId} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Get transmission history
-router.get('/history', async (_req: AuthRequest, res: Response): Promise<void> => {
+// Get transmission history (users see only their own; admins see all)
+router.get('/history', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
+    const params: any[] = [];
+    let where = '';
+    if (!isAdmin) {
+      where = 'WHERE t.sent_by = $1';
+      params.push(req.user?.id);
+    }
     const result = await pool.query(
-      `SELECT t.*, m.mawb_no, u.username,
+      `SELECT t.id, t.transmission_type, t.file_name, t.sent_at, t.status,
+              t.mawb_id, m.mawb_no, u.username,
               (SELECT COUNT(*) FROM hawbs WHERE mawb_id = t.mawb_id) as hawb_count,
               p.customs_house_code as location, p.pan_number
        FROM transmissions t
        LEFT JOIN mawbs m ON t.mawb_id = m.id
        LEFT JOIN users u ON t.sent_by = u.id
        LEFT JOIN profiles p ON t.profile_id = p.id
-       ORDER BY t.sent_at DESC LIMIT 100`
+       ${where}
+       ORDER BY t.sent_at DESC LIMIT 200`,
+      params
     );
     res.json(result.rows);
   } catch (err) {
+    logger.error('TRANSMISSIONS', 'GET /history error', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Re-download a stored transmission file by ID (uses stored filename)
+router.get('/download/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await pool.query('SELECT * FROM transmissions WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) { res.status(404).json({ message: 'File not found' }); return; }
+    const t = result.rows[0];
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename="${t.file_name}"`);
+    res.send(t.file_content || '');
+  } catch (err) {
+    logger.error('TRANSMISSIONS', `GET /download/${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });

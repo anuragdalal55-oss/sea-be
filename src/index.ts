@@ -16,6 +16,7 @@ import igmRoutes from './routes/igm';
 import egmRoutes from './routes/egm';
 import reportsRoutes from './routes/reports';
 import path from 'path/win32';
+import { logger, sanitizeBody } from './utils/logger';
 
 dotenv.config();
 
@@ -24,13 +25,34 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors({
-  origin: '*', // Your Firebase URL
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
-}))
+}));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// ─── Request logger ────────────────────────────────────────────────────────────
+app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    const status = res.statusCode;
+    const msg = `${req.method} ${req.path} → ${status} (${ms}ms)`;
+    if (status >= 500) {
+      logger.error('HTTP', msg);
+    } else if (status >= 400) {
+      logger.warn('HTTP', msg, {
+        query: req.query,
+        body: sanitizeBody(req.body),
+      });
+    } else {
+      logger.info('HTTP', msg);
+    }
+  });
+  next();
+});
 
 // Health check
 app.get('/health', (_req, res) => {
@@ -50,7 +72,8 @@ app.use('/api/egm', egmRoutes);
 app.use('/api/reports', reportsRoutes);
 
 // 404 handler
-app.use((_req, res) => {
+app.use((req: express.Request, res: express.Response) => {
+  logger.warn('HTTP', `404 Not Found: ${req.method} ${req.originalUrl}`);
   res.status(404).json({ message: 'Route not found' });
 });
 
@@ -60,17 +83,20 @@ app.use(express.static(publicPath));
 
 // Handle React Routing (SPA)
 app.get('*', (_req, res) => {
-    res.sendFile(path.join(publicPath, 'index.html'));
+  res.sendFile(path.join(publicPath, 'index.html'));
 });
 
-// Error handler
+// Global error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err.stack);
+  logger.error('EXPRESS', 'Unhandled error', err);
   res.status(500).json({ message: 'Internal server error' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 EDISS Backend running on http://localhost:${PORT}`);
+  logger.info('SERVER', `EDISS Backend running on http://localhost:${PORT}`, {
+    env: process.env.NODE_ENV || 'development',
+    port: PORT,
+  });
 });
 
 export default app;

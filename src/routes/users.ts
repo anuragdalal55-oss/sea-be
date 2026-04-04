@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import pool from '../db';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { logger } from '../utils/logger';
 
 const router = Router();
 router.use(authenticate);
@@ -18,6 +19,7 @@ router.get('/', requireRole(['master_admin', 'admin']), async (req: AuthRequest,
     );
     res.json(result.rows);
   } catch (err) {
+    logger.error('USERS', 'GET / error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -41,11 +43,14 @@ router.post('/register', requireRole(['master_admin', 'admin']), async (req: Aut
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, username, full_name, role`,
       [username, hash, password, full_name, email, role || 'user', profile_id]
     );
+    logger.info('USERS', `User registered: ${username} (${role || 'user'}) by ${req.user?.username}`);
     res.status(201).json(result.rows[0]);
   } catch (err: any) {
     if (err.code === '23505') {
+      logger.warn('USERS', `Register failed — username already exists: ${username}`);
       res.status(400).json({ message: 'Username already exists' });
     } else {
+      logger.error('USERS', 'Register error', err);
       res.status(500).json({ message: 'Server error' });
     }
   }
@@ -60,8 +65,10 @@ router.put('/:id', requireRole(['master_admin', 'admin']), async (req: AuthReque
        WHERE id=$6`,
       [full_name, email, role, is_active, profile_id, req.params.id]
     );
+    logger.info('USERS', `User updated: id=${req.params.id} by ${req.user?.username}`);
     res.json({ message: 'Updated' });
   } catch (err) {
+    logger.error('USERS', `PUT /${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -74,8 +81,10 @@ router.put('/:id/location', requireRole(['master_admin', 'admin']), async (req: 
       `UPDATE users SET customs_house_code=$1, updated_at=NOW() WHERE id=$2`,
       [customs_house_code || null, req.params.id]
     );
+    logger.info('USERS', `Location updated: id=${req.params.id} by ${req.user?.username}`);
     res.json({ message: 'Location updated' });
   } catch (err) {
+    logger.error('USERS', `PUT /${req.params.id}/location error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -93,8 +102,10 @@ router.put('/:id/reset-password', requireRole(['master_admin', 'admin']), async 
       'UPDATE users SET password_hash=$1, password_plain=$2, updated_at=NOW() WHERE id=$3',
       [hash, new_password, req.params.id]
     );
+    logger.info('USERS', `Password reset for user id=${req.params.id} by ${req.user?.username}`);
     res.json({ message: 'Password reset successfully' });
   } catch (err) {
+    logger.error('USERS', `PUT /${req.params.id}/reset-password error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -103,8 +114,10 @@ router.put('/:id/reset-password', requireRole(['master_admin', 'admin']), async 
 router.delete('/:id', requireRole(['master_admin']), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     await pool.query('UPDATE users SET is_active=FALSE WHERE id=$1', [req.params.id]);
+    logger.info('USERS', `User deactivated: id=${req.params.id} by ${req.user?.username}`);
     res.json({ message: 'Deactivated' });
   } catch (err) {
+    logger.error('USERS', `DELETE /${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });

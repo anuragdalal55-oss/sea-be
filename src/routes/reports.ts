@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import pool from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { logger } from '../utils/logger';
 
 const router = Router();
 router.use(authenticate);
@@ -10,6 +11,7 @@ router.use(authenticate);
 router.get('/checklist', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { from_date, to_date, profile_id, status } = req.query;
+    const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
     let query = `
       SELECT m.*,
         p.profile_code, p.company_name,
@@ -27,11 +29,13 @@ router.get('/checklist', async (req: AuthRequest, res: Response): Promise<void> 
     if (to_date) { query += ` AND m.created_at <= $${idx++}`; params.push(to_date + ' 23:59:59'); }
     if (profile_id) { query += ` AND m.profile_id = $${idx++}`; params.push(profile_id); }
     if (status) { query += ` AND m.status = $${idx++}`; params.push(status); }
+    // Non-admins see only their own MAWBs
+    if (!isAdmin) { query += ` AND m.created_by = $${idx++}`; params.push(req.user?.id); }
     query += ' ORDER BY m.created_at DESC';
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
+    logger.error('REPORTS', 'GET /checklist error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -93,31 +97,107 @@ router.get('/account-statement', async (req: AuthRequest, res: Response): Promis
 
     res.json({ data: dataResult.rows, total, page, pageSize });
   } catch (err) {
-    console.error(err);
+    logger.error('REPORTS', 'GET /account-statement error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
 // ─── Statement by Consol User ─────────────────────────────────────────────────
-router.get('/statement-by-consol', async (_req: AuthRequest, res: Response): Promise<void> => {
+router.get('/statement-by-consol', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
+    const { from_date, to_date, user_id } = req.query;
+
+    const params: any[] = [];
+    const conditions: string[] = ['1=1'];
+    let idx = 1;
+
+    if (from_date) { conditions.push(`m.created_at >= $${idx++}`); params.push(from_date); }
+    if (to_date)   { conditions.push(`m.created_at <= $${idx++}`); params.push(to_date + ' 23:59:59'); }
+    // Admins can filter by user; non-admins see only their own
+    if (isAdmin && user_id) {
+      conditions.push(`m.created_by = $${idx++}`);
+      params.push(user_id);
+    } else if (!isAdmin) {
+      conditions.push(`m.created_by = $${idx++}`);
+      params.push(req.user?.id);
+    }
+    const where = conditions.join(' AND ');
+
     const result = await pool.query(`
-      SELECT p.id as profile_id, p.profile_code, p.company_name, p.carn_number,
+      SELECT
+        u.id as user_id, u.username, u.full_name,
         COUNT(DISTINCT m.id) as total_mawbs,
         COUNT(DISTINCT h.id) as total_hawbs,
         COALESCE(SUM(m.total_packages), 0) as total_packages,
-        COALESCE(SUM(m.gross_weight), 0) as total_weight,
+        COALESCE(SUM(m.gross_weight)::numeric, 0) as total_weight,
         COUNT(DISTINCT t.id) as total_transmissions,
         MAX(t.sent_at) as last_transmission
-      FROM profiles p
-      LEFT JOIN mawbs m ON m.profile_id = p.id
+      FROM mawbs m
+      JOIN users u ON m.created_by = u.id
       LEFT JOIN hawbs h ON h.mawb_id = m.id
-      LEFT JOIN transmissions t ON t.profile_id = p.id
-      GROUP BY p.id, p.profile_code, p.company_name, p.carn_number
+      LEFT JOIN transmissions t ON t.mawb_id = m.id
+      WHERE ${where}
+      GROUP BY u.id, u.username, u.full_name
       ORDER BY total_transmissions DESC
-    `);
+    `, params);
     res.json(result.rows);
   } catch (err) {
+    logger.error('REPORTS', 'GET /statement-by-consol error', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ─── Statement by Consol (user-friendly, accessible to all) ───────────────────
+router.get('/consol-statement', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
+    const { from_date, to_date, user_id } = req.query;
+    const exportAll = req.query.export === 'true';
+    const page = Math.max(1, parseInt(String(req.query.page || '1')));
+    const pageSize = 100;
+
+    const params: any[] = [];
+    let filters = '';
+    let idx = 1;
+    if (from_date) { filters += ` AND m.created_at >= $${idx++}`; params.push(from_date); }
+    if (to_date)   { filters += ` AND m.created_at <= $${idx++}`; params.push(to_date + ' 23:59:59'); }
+    // Admins can filter by user; non-admins always see only their own
+    const effectiveUserId = isAdmin ? (user_id as string || '') : req.user?.id;
+    if (effectiveUserId) { filters += ` AND m.created_by = $${idx++}`; params.push(effectiveUserId); }
+
+    const base = `
+      FROM mawbs m
+      LEFT JOIN profiles p ON m.profile_id = p.id
+      LEFT JOIN users u ON m.created_by = u.id
+      WHERE 1=1${filters}`;
+
+    const selectCols = `
+      SELECT m.id, m.mawb_no, m.created_at, m.transmission_date,
+             m.customs_house_code, m.status, m.message_type, m.origin, m.destination,
+             m.total_packages, m.gross_weight,
+             p.pan_number, p.company_name, p.profile_code,
+             u.username,
+             (SELECT COUNT(*) FROM hawbs h WHERE h.mawb_id = m.id) AS hawb_count,
+             (SELECT COALESCE(SUM(h.total_packages),0) FROM hawbs h WHERE h.mawb_id = m.id) AS hawb_total_packages,
+             (SELECT COALESCE(SUM(h.gross_weight),0)  FROM hawbs h WHERE h.mawb_id = m.id) AS hawb_total_weight`;
+
+    if (exportAll) {
+      const result = await pool.query(`${selectCols} ${base} ORDER BY m.created_at DESC`, params);
+      res.json(result.rows);
+      return;
+    }
+
+    const countResult = await pool.query(`SELECT COUNT(*) ${base}`, params);
+    const total = parseInt(countResult.rows[0].count);
+    const offset = (page - 1) * pageSize;
+    const dataResult = await pool.query(
+      `${selectCols} ${base} ORDER BY m.created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...params, pageSize, offset]
+    );
+    res.json({ data: dataResult.rows, total, page, pageSize });
+  } catch (err) {
+    logger.error('REPORTS', 'GET /statement-by-consol error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

@@ -54,7 +54,8 @@ export interface GenerateOptions {
 
 function formatDate(dateStr?: string | Date): string {
   if (!dateStr) return '';
-  const d = new Date(dateStr);
+  const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in ms
+  const d = new Date(new Date().getTime() + istOffset);
   if (isNaN(d.getTime())) return '';
   const dd = String(d.getDate()).padStart(2, '0');
   const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -64,8 +65,14 @@ function formatDate(dateStr?: string | Date): string {
 
 function now(): { date: string; time: string } {
   const d = new Date();
-  const date = `${String(d.getDate()).padStart(2,'0')}${String(d.getMonth()+1).padStart(2,'0')}${d.getFullYear()}`;
-  const time = `${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
+
+  // Convert to IST (UTC + 5:30)
+  const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in ms
+  const istDate = new Date(d.getTime() + istOffset);
+
+  const date = `${String(istDate.getUTCDate()).padStart(2, '0')}${String(istDate.getUTCMonth() + 1).padStart(2, '0')}${istDate.getUTCFullYear()}`;
+  const time = `${String(istDate.getUTCHours()).padStart(2, '0')}${String(istDate.getUTCMinutes()).padStart(2, '0')}`;
+
   return { date, time };
 }
 
@@ -81,7 +88,7 @@ export function generateCGM(
 ): string {
   const { date, time } = now();
   const controlNo = options.controlNumber || Date.now().toString().slice(-6);
-  const mode = options.testMode ? 'T' : 'P';
+  const mode = 'P';
   const sender = options.senderCode || '';
   const receiver = options.receiverCode || mawb.customs_house_code;
 

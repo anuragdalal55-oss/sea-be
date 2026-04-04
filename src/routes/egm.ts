@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import pool from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { generateEGM, generateEGMFileName } from '../utils/egmGenerator';
+import { logger } from '../utils/logger';
 
 const router = Router();
 router.use(authenticate);
@@ -60,7 +61,7 @@ router.post('/flights', async (req: AuthRequest, res: Response): Promise<void> =
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    logger.error('EGM', 'Route error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -133,7 +134,7 @@ router.post('/mawbs', async (req: AuthRequest, res: Response): Promise<void> => 
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    logger.error('EGM', 'Route error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -284,7 +285,7 @@ router.post('/transmit/:flightId', async (req: AuthRequest, res: Response): Prom
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     res.send(fileContent);
   } catch (err) {
-    console.error(err);
+    logger.error('EGM', 'Route error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

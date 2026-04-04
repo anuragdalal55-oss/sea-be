@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import pool from '../db';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { logger } from '../utils/logger';
 
 const router = Router();
 router.use(authenticate);
@@ -85,7 +86,7 @@ router.post('/', requireRole(['master_admin', 'admin']), async (req: AuthRequest
     res.status(201).json(profile);
   } catch (err: any) {
     if (err.code === '23505') res.status(400).json({ message: 'Profile code already exists' });
-    else { console.error(err); res.status(500).json({ message: 'Server error' }); }
+    else { logger.error('PROFILES', 'Route error', err); res.status(500).json({ message: 'Server error' }); }
   }
 });
 
@@ -127,7 +128,7 @@ router.put('/:id', requireRole(['master_admin', 'admin']), async (req: AuthReque
 
     res.json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    logger.error('PROFILES', 'Route error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -137,7 +138,7 @@ router.delete('/:id', requireRole(['master_admin', 'admin']), async (req: AuthRe
     await pool.query('DELETE FROM profiles WHERE id = $1', [req.params.id]);
     res.json({ message: 'Profile deleted' });
   } catch (err) {
-    console.error(err);
+    logger.error('PROFILES', 'Route error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

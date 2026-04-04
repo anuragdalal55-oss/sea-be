@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import pool from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { logger } from '../utils/logger';
 
 const router = Router();
 router.use(authenticate);
@@ -29,13 +30,22 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     const page     = Math.max(1, parseInt(String(req.query.page  || '1')));
     const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || '25'))));
     const offset   = (page - 1) * pageSize;
+    const isAdmin  = req.user?.role === 'master_admin' || req.user?.role === 'admin';
 
     const params: any[] = [];
-    let where = '';
+    const conditions: string[] = [];
+
     if (search) {
       params.push(`%${search}%`);
-      where = ' WHERE m.mawb_no ILIKE $1 OR m.origin ILIKE $1';
+      conditions.push(`(m.mawb_no ILIKE $${params.length} OR m.origin ILIKE $${params.length})`);
     }
+    // Non-admins see only their own MAWBs
+    if (!isAdmin) {
+      params.push(req.user?.id);
+      conditions.push(`m.created_by = $${params.length}`);
+    }
+
+    const where = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
 
     const countResult = await pool.query(
       `SELECT COUNT(*) FROM mawbs m${where}`,
@@ -43,9 +53,8 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     );
     const total = parseInt(countResult.rows[0].count);
 
-    const dataParams = [...params, pageSize, offset];
-    const limitIdx   = params.length + 1;
-    const offsetIdx  = params.length + 2;
+    const limitIdx  = params.length + 1;
+    const offsetIdx = params.length + 2;
 
     const result = await pool.query(
       `SELECT m.*, p.profile_code, p.company_name,
@@ -54,12 +63,12 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
        ${where}
        ORDER BY m.created_at DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
-      dataParams
+      [...params, pageSize, offset]
     );
 
     res.json({ data: result.rows, total, page, pageSize });
   } catch (err) {
-    console.error(err);
+    logger.error('MAWBS', 'GET / error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -83,6 +92,7 @@ router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     );
     res.json({ ...result.rows[0], hawbs: hawbs.rows });
   } catch (err) {
+    logger.error('MAWBS', `GET /${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -110,9 +120,10 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
        toNumOrNull(total_packages) || 0, toNumOrNull(gross_weight) || 0,
        customs_house_code || null, profile_id || null, req.user?.id]
     );
+    logger.info('MAWBS', `Created MAWB: ${mawb_no} by user=${req.user?.id}`);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    logger.error('MAWBS', `POST / create error (mawb_no=${req.body.mawb_no})`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -136,6 +147,7 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     );
     res.json(result.rows[0]);
   } catch (err) {
+    logger.error('MAWBS', `PUT /${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -168,9 +180,10 @@ router.post('/amend/:id', async (req: AuthRequest, res: Response): Promise<void>
        customs_house_code || m.customs_house_code || null,
        profile_id || m.profile_id || null, req.user?.id, m.id, seq]
     );
+    logger.info('MAWBS', `Amended MAWB: ${newNo} from id=${req.params.id}`);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    logger.error('MAWBS', `POST /amend/${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -203,9 +216,10 @@ router.post('/part/:id', async (req: AuthRequest, res: Response): Promise<void> 
        customs_house_code || m.customs_house_code || null,
        profile_id || m.profile_id || null, req.user?.id, m.id, seq]
     );
+    logger.info('MAWBS', `Part MAWB: ${newNo} from id=${req.params.id}`);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    logger.error('MAWBS', `POST /part/${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -238,9 +252,10 @@ router.post('/delete-copy/:id', async (req: AuthRequest, res: Response): Promise
        customs_house_code || m.customs_house_code || null,
        profile_id || m.profile_id || null, req.user?.id, m.id, seq]
     );
+    logger.info('MAWBS', `Delete-copy MAWB: ${newNo} from id=${req.params.id}`);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    logger.error('MAWBS', `POST /delete-copy/${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -249,8 +264,10 @@ router.post('/delete-copy/:id', async (req: AuthRequest, res: Response): Promise
 router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     await pool.query('DELETE FROM mawbs WHERE id = $1', [req.params.id]);
+    logger.info('MAWBS', `Deleted MAWB id=${req.params.id} by user=${req.user?.id}`);
     res.json({ message: 'Deleted' });
   } catch (err) {
+    logger.error('MAWBS', `DELETE /${req.params.id} error`, err);
     res.status(500).json({ message: 'Server error' });
   }
 });

@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import pool from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { logger } from '../utils/logger';
 
 const router = Router();
 
@@ -24,17 +25,18 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       [username]
     );
     if (result.rows.length === 0) {
+      logger.warn('AUTH', `Login failed — user not found: ${username}`);
       res.status(401).json({ message: 'Invalid credentials' });
       return;
     }
     const user = result.rows[0];
-    console.log('User found:', user.username);
     const valid = await bcrypt.compare(password, user.password_hash);
-    console.log('Password valid:', valid);
     if (!valid) {
+      logger.warn('AUTH', `Login failed — wrong password for user: ${username}`);
       res.status(401).json({ message: 'Invalid credentials' });
       return;
     }
+    logger.info('AUTH', `Login successful: ${username} (${user.role})`);
     const token = jwt.sign(
       { id: user.id, username: user.username, role: user.role, profile_id: user.profile_id },
       process.env.JWT_SECRET || 'secret',
@@ -55,7 +57,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       }
     });
   } catch (err) {
-    console.error(err);
+    logger.error('AUTH', 'Login error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -76,6 +78,7 @@ router.get('/me', authenticate, async (req: AuthRequest, res: Response): Promise
     }
     res.json(result.rows[0]);
   } catch (err) {
+    logger.error('AUTH', 'GET /me error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -88,13 +91,16 @@ router.post('/change-password', authenticate, async (req: AuthRequest, res: Resp
     const user = result.rows[0];
     const valid = await bcrypt.compare(current_password, user.password_hash);
     if (!valid) {
+      logger.warn('AUTH', `Change password failed — wrong current password for user: ${req.user?.username}`);
       res.status(400).json({ message: 'Current password incorrect' });
       return;
     }
     const hash = await bcrypt.hash(new_password, 10);
     await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user?.id]);
+    logger.info('AUTH', `Password changed for user: ${req.user?.username}`);
     res.json({ message: 'Password changed successfully' });
   } catch (err) {
+    logger.error('AUTH', 'Change password error', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
