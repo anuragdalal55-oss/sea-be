@@ -15,6 +15,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
   const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || '25'))));
   const offset   = (page - 1) * pageSize;
   const isAdmin  = req.user?.role === 'master_admin' || req.user?.role === 'admin';
+  const locationFilter = req.query.customs_house_code as string || '';
 
   try {
     const params: any[] = [];
@@ -28,6 +29,11 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
       conditions.push(`(h.hawb_no ILIKE $${params.length + 1} OR h.origin ILIKE $${params.length + 1})`);
       params.push(`%${search}%`);
     }
+    // Filter by selected session location (via the parent MAWB's customs_house_code)
+    if (locationFilter) {
+      conditions.push(`m.customs_house_code = $${params.length + 1}`);
+      params.push(locationFilter);
+    }
     // Non-admins see only their own HAWBs
     if (!isAdmin) {
       conditions.push(`h.created_by = $${params.length + 1}`);
@@ -37,7 +43,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     const where = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
 
     const countResult = await pool.query(
-      `SELECT COUNT(*) FROM hawbs h${where}`,
+      `SELECT COUNT(*) FROM hawbs h LEFT JOIN mawbs m ON h.mawb_id = m.id${where}`,
       params
     );
     const total = parseInt(countResult.rows[0].count);
@@ -91,6 +97,12 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
     if (mawbResult.rows.length === 0) { res.status(404).json({ message: 'MAWB not found' }); return; }
     const mawb = mawbResult.rows[0];
 
+    const dupCheck = await pool.query('SELECT id FROM hawbs WHERE hawb_no = $1', [hawb_no]);
+    if (dupCheck.rows.length > 0) {
+      res.status(400).json({ message: `HAWB number "${hawb_no}" already exists. House numbers must be globally unique.` });
+      return;
+    }
+
     const result = await pool.query(
       `INSERT INTO hawbs (mawb_id, hawb_no, origin, destination, shipment_type,
         total_packages, gross_weight, item_description, profile_id, created_by, message_type)
@@ -119,13 +131,22 @@ router.post('/batch', async (req: AuthRequest, res: Response): Promise<void> => 
     const mawbResult = await client.query(
       'SELECT message_type, origin, destination FROM mawbs WHERE id = $1', [mawb_id]
     );
-    if (mawbResult.rows.length === 0) { res.status(404).json({ message: 'MAWB not found' }); return; }
+    if (mawbResult.rows.length === 0) {
+      res.status(404).json({ message: 'MAWB not found' });
+      return; // finally will release the client
+    }
     const mawb = mawbResult.rows[0];
 
     await client.query('BEGIN');
     const created = [];
     for (const h of hawbs) {
       if (!h.hawb_no || String(h.hawb_no).trim() === '') continue;
+      const dup = await client.query('SELECT id FROM hawbs WHERE hawb_no = $1', [h.hawb_no]);
+      if (dup.rows.length > 0) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ message: `HAWB number "${h.hawb_no}" already exists.` });
+        return; // finally will release the client
+      }
       const r = await client.query(
         `INSERT INTO hawbs (mawb_id, hawb_no, origin, destination, shipment_type,
           total_packages, gross_weight, item_description, profile_id, created_by, message_type)

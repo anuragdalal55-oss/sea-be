@@ -7,24 +7,31 @@ import { logger } from '../utils/logger';
 const router = Router();
 router.use(authenticate);
 
-// Get or increment file control number for a profile+location
-async function getNextControlNumber(profileId: string, locationCode: string): Promise<number> {
+// Get or increment file control number for a user+location
+async function getNextControlNumber(userId: string, locationCode: string): Promise<number> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query(
-      `INSERT INTO file_control_numbers (profile_id, location_code, control_number)
-       VALUES ($1, $2, 1)
-       ON CONFLICT (profile_id, location_code)
-       DO UPDATE SET control_number = file_control_numbers.control_number + 1`,
-      [profileId, locationCode]
+    const existing = await client.query(
+      'SELECT id, control_number FROM file_control_numbers WHERE user_id = $1 AND location_code = $2',
+      [userId, locationCode]
     );
-    const result = await client.query(
-      'SELECT control_number FROM file_control_numbers WHERE profile_id = $1 AND location_code = $2',
-      [profileId, locationCode]
-    );
+    let controlNum: number;
+    if (existing.rows.length > 0) {
+      controlNum = existing.rows[0].control_number + 1;
+      await client.query(
+        'UPDATE file_control_numbers SET control_number = $1 WHERE id = $2',
+        [controlNum, existing.rows[0].id]
+      );
+    } else {
+      controlNum = 1;
+      await client.query(
+        'INSERT INTO file_control_numbers (user_id, location_code, control_number) VALUES ($1, $2, 1)',
+        [userId, locationCode]
+      );
+    }
     await client.query('COMMIT');
-    return result.rows[0]?.control_number || 1;
+    return controlNum;
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -64,11 +71,12 @@ router.post('/generate-cgm/:mawbId', async (req: AuthRequest, res: Response): Pr
     // Username prefix: first 3 chars of username in uppercase
     const userPrefix = (req.user?.username?.substring(0, 3).toUpperCase() || '').trim();
 
-    // Get control number
+    // Get control number per user+location
     const profileId = mawbRow.profile_id;
+    const userId = req.user?.id;
     let controlNum = 1;
-    if (profileId) {
-      controlNum = await getNextControlNumber(profileId, locationCode);
+    if (userId) {
+      controlNum = await getNextControlNumber(userId, locationCode);
     }
     const controlNumber = `${userPrefix}${controlNum}`;
 

@@ -41,7 +41,7 @@ router.post('/register', requireRole(['master_admin', 'admin']), async (req: Aut
     const result = await pool.query(
       `INSERT INTO users (username, password_hash, password_plain, full_name, email, role, profile_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, username, full_name, role`,
-      [username, hash, password, full_name, email, role || 'user', profile_id]
+      [username, hash, password, full_name, email, role || 'user', profile_id || null]
     );
     logger.info('USERS', `User registered: ${username} (${role || 'user'}) by ${req.user?.username}`);
     res.status(201).json(result.rows[0]);
@@ -63,7 +63,7 @@ router.put('/:id', requireRole(['master_admin', 'admin']), async (req: AuthReque
     await pool.query(
       `UPDATE users SET full_name=$1, email=$2, role=$3, is_active=$4, profile_id=$5, updated_at=NOW()
        WHERE id=$6`,
-      [full_name, email, role, is_active, profile_id, req.params.id]
+      [full_name, email, role, is_active, profile_id || null, req.params.id]
     );
     logger.info('USERS', `User updated: id=${req.params.id} by ${req.user?.username}`);
     res.json({ message: 'Updated' });

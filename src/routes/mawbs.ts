@@ -32,12 +32,27 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     const offset   = (page - 1) * pageSize;
     const isAdmin  = req.user?.role === 'master_admin' || req.user?.role === 'admin';
 
+    // Optional location filter — sent by frontend based on user's selected session location
+    const locationFilter = req.query.customs_house_code as string || '';
+    // Optional status filter — e.g. 'draft' to exclude transmitted MAWBs
+    const statusFilter = req.query.status as string || '';
+
     const params: any[] = [];
     const conditions: string[] = [];
 
     if (search) {
       params.push(`%${search}%`);
       conditions.push(`(m.mawb_no ILIKE $${params.length} OR m.origin ILIKE $${params.length})`);
+    }
+    // Filter by selected session location (applies to all roles)
+    if (locationFilter) {
+      params.push(locationFilter);
+      conditions.push(`m.customs_house_code = $${params.length}`);
+    }
+    // Filter by status (e.g. 'draft' to exclude transmitted MAWBs)
+    if (statusFilter) {
+      params.push(statusFilter);
+      conditions.push(`m.status = $${params.length}`);
     }
     // Non-admins see only their own MAWBs
     if (!isAdmin) {
@@ -104,6 +119,10 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
     res.status(400).json({ message: 'mawb_no, origin, destination required' });
     return;
   }
+  if (!/^\d+$/.test(mawb_no)) {
+    res.status(400).json({ message: 'MAWB number must contain digits only' });
+    return;
+  }
   try {
     // Enforce unique MAWB number
     const existing = await pool.query('SELECT id FROM mawbs WHERE mawb_no = $1', [mawb_no]);
@@ -137,7 +156,8 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
       `UPDATE mawbs SET mawb_date=$1, origin=$2, destination=$3,
        total_packages=$4, gross_weight=$5, item_description='CONSOL',
        flight_no=$6, flight_origin_date=$7, igm_no=$8, igm_date=$9,
-       customs_house_code=$10, profile_id=$11, updated_at=NOW()
+       customs_house_code=$10, profile_id=$11, updated_at=NOW(),
+       status='draft', transmission_date=NULL
        WHERE id=$12 RETURNING *`,
       [toDateOrNull(mawb_date), origin, destination,
        toNumOrNull(total_packages) || 0, toNumOrNull(gross_weight) || 0,
