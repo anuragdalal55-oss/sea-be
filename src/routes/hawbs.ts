@@ -8,6 +8,19 @@ const toNumOrNull = (v: any) => (v !== '' && v !== null && v !== undefined ? Num
 const router = Router();
 router.use(authenticate);
 
+const hawbSelect = `
+  SELECT h.*, m.mawb_no, m.message_type as mawb_message_type,
+         m.origin as mawb_origin, m.destination as mawb_destination,
+         m.status as mawb_status,
+         m.transmission_date as mawb_transmission_date,
+         CASE
+           WHEN m.transmission_date IS NOT NULL OR m.status = 'transmitted' THEN 'transmitted'
+           ELSE COALESCE(h.status, 'draft')
+         END as status
+  FROM hawbs h
+  LEFT JOIN mawbs m ON h.mawb_id = m.id
+`;
+
 // List HAWBs (server-side pagination, optionally filtered by mawb_id / search)
 router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
   const { mawb_id, search } = req.query;
@@ -20,6 +33,9 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const params: any[] = [];
     const conditions: string[] = [];
+
+    // Show only HAWBs whose parent MAWB has not been transmitted yet.
+    conditions.push(`(m.transmission_date IS NULL AND COALESCE(m.status, 'draft') <> 'transmitted')`);
 
     if (mawb_id) {
       conditions.push(`h.mawb_id = $${params.length + 1}`);
@@ -52,9 +68,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     const offsetIdx = params.length + 2;
 
     const result = await pool.query(
-      `SELECT h.*, m.mawb_no, m.message_type as mawb_message_type,
-              m.origin as mawb_origin, m.destination as mawb_destination
-       FROM hawbs h LEFT JOIN mawbs m ON h.mawb_id = m.id
+      `${hawbSelect}
        ${where}
        ORDER BY h.created_at DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
@@ -72,9 +86,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
 router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await pool.query(
-      `SELECT h.*, m.mawb_no, m.message_type as mawb_message_type,
-              m.origin as mawb_origin, m.destination as mawb_destination
-       FROM hawbs h LEFT JOIN mawbs m ON h.mawb_id = m.id WHERE h.id = $1`,
+      `${hawbSelect} WHERE h.id = $1`,
       [req.params.id]
     );
     if (result.rows.length === 0) { res.status(404).json({ message: 'Not found' }); return; }
@@ -244,7 +256,7 @@ router.get('/checklist/data', async (req: AuthRequest, res: Response): Promise<v
       mawbQuery += ` AND m.id = $${params.length + 1}`;
       params.push(mawb_id);
     } else {
-      mawbQuery += ` AND m.transmission_date IS NOT NULL`;
+      mawbQuery += ` AND (m.transmission_date IS NOT NULL OR m.status = 'transmitted')`;
     }
     if (customs_house_code) {
       mawbQuery += ` AND (m.customs_house_code = $${params.length + 1} OR p.customs_house_code = $${params.length + 1})`;
@@ -261,7 +273,17 @@ router.get('/checklist/data', async (req: AuthRequest, res: Response): Promise<v
     const result = [];
     for (const mawb of mawbs.rows) {
       const hawbs = await pool.query(
-        'SELECT * FROM hawbs WHERE mawb_id = $1 ORDER BY created_at ASC', [mawb.id]
+        `SELECT h.*, m.status as mawb_status,
+                m.transmission_date as mawb_transmission_date,
+                CASE
+                  WHEN m.transmission_date IS NOT NULL OR m.status = 'transmitted' THEN 'transmitted'
+                  ELSE COALESCE(h.status, 'draft')
+                END as status
+         FROM hawbs h
+         LEFT JOIN mawbs m ON h.mawb_id = m.id
+         WHERE h.mawb_id = $1
+         ORDER BY h.created_at ASC`,
+        [mawb.id]
       );
       result.push({ ...mawb, hawbs: hawbs.rows });
     }

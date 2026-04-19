@@ -18,8 +18,10 @@ import egmRoutes from './routes/egm';
 import reportsRoutes from './routes/reports';
 import path from 'path/win32';
 import { logger, sanitizeBody } from './utils/logger';
+import { applyAppEnv } from './utils/env';
 
 dotenv.config();
+const appEnv = applyAppEnv();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -101,7 +103,7 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 
 app.listen(PORT, () => {
   logger.info('SERVER', `EDISS Backend running on http://localhost:${PORT}`, {
-    env: process.env.NODE_ENV || 'development',
+    env: appEnv,
     port: PORT,
   });
 });
