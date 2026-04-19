@@ -4,7 +4,7 @@ dns.setDefaultResultOrder('ipv4first'); // Fix: Supabase ENOTFOUND on Windows No
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import pool from '../src/db';
+import pool from './db';
 
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
