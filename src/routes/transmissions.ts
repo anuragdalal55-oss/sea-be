@@ -7,6 +7,13 @@ import { logger } from '../utils/logger';
 const router = Router();
 router.use(authenticate);
 
+// Logged query helper — logs SQL + params then executes
+async function dbq(tag: string, sql: string, params?: any[]): Promise<any> {
+  const p = params ? JSON.stringify(params) : '[]';
+  logger.info('SQL', `[${tag}] ${sql.replace(/\s+/g, ' ').trim()} | params=${p}`);
+  return pool.query(sql, params);
+}
+
 // Get or increment file control number for a user+location
 async function getNextControlNumber(userId: string, locationCode: string): Promise<number> {
   const client = await pool.connect();
@@ -16,15 +23,18 @@ async function getNextControlNumber(userId: string, locationCode: string): Promi
       'SELECT id, control_number FROM file_control_numbers WHERE user_id = $1 AND location_code = $2',
       [userId, locationCode]
     );
+    logger.info('SQL', `[ctrl_num] SELECT file_control_numbers user_id=${userId} loc=${locationCode} → rows=${existing.rows.length} val=${existing.rows[0]?.control_number}`);
     let controlNum: number;
     if (existing.rows.length > 0) {
       controlNum = existing.rows[0].control_number + 1;
+      logger.info('SQL', `[ctrl_num] UPDATE control_number=${controlNum} id=${existing.rows[0].id}`);
       await client.query(
         'UPDATE file_control_numbers SET control_number = $1 WHERE id = $2',
         [controlNum, existing.rows[0].id]
       );
     } else {
       controlNum = 1;
+      logger.info('SQL', `[ctrl_num] INSERT new row user_id=${userId} loc=${locationCode} control_number=1`);
       await client.query(
         'INSERT INTO file_control_numbers (user_id, location_code, control_number) VALUES ($1, $2, 1)',
         [userId, locationCode]
@@ -40,39 +50,91 @@ async function getNextControlNumber(userId: string, locationCode: string): Promi
   }
 }
 
+// Strip -A1/-P1/-D1 suffixes from MAWB/HAWB numbers for CGM output
+const stripSuffix = (no: string) => (no || '').replace(/-[APD]\d+$/, '').trim();
+
 // Generate CGM file for a MAWB
 router.post('/generate-cgm/:mawbId', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const mawbResult = await pool.query(
-      `SELECT m.*, p.carn_number, p.pan_number, p.user_prefix, p.consol_agent_id,
-              p.customs_house_code as p_customs_code, p.profile_code,
-              p.company_name, p.icegate_code, p.location_code as p_location
-       FROM mawbs m LEFT JOIN profiles p ON m.profile_id = p.id
-       WHERE m.id = $1`,
-      [req.params.mawbId]
-    );
+    // Step 1: Get MAWB row
+    const mawbResult = await dbq('gen-cgm:mawb', 'SELECT * FROM mawbs WHERE id = $1', [req.params.mawbId]);
     if (mawbResult.rows.length === 0) { res.status(404).json({ message: 'MAWB not found' }); return; }
     const mawbRow = mawbResult.rows[0];
+    logger.info('SQL', `[gen-cgm:mawb] found mawb_no=${mawbRow.mawb_no} profile_id=${mawbRow.profile_id} created_by=${mawbRow.created_by} customs_house_code=${mawbRow.customs_house_code}`);
 
-    const hawbResult = await pool.query(
-      'SELECT * FROM hawbs WHERE mawb_id = $1 ORDER BY created_at ASC',
-      [req.params.mawbId]
-    );
+    // Step 2: Find profile — try in order:
+    //  a) MAWB's own profile_id (direct link)
+    //  b) mawb.created_by + location (user who created the MAWB)
+    //  c) req.user + location (user generating the file)
+    //  d) location only (any profile for this customs location)
+    const custCode = (mawbRow.customs_house_code || '').trim();
+    let profileRow: any = {};
 
-    // Auto-derive customs house code: IN{DEST3}4 (e.g. DEL → INDEL4)
+    if (mawbRow.profile_id) {
+      const r = await dbq('gen-cgm:profile[1-by-id]', 'SELECT * FROM profiles WHERE id = $1', [mawbRow.profile_id]);
+      logger.info('SQL', `[gen-cgm:profile[1-by-id]] rows=${r.rows.length} pan=${r.rows[0]?.pan_number} icegate=${r.rows[0]?.icegate_code}`);
+      if (r.rows.length > 0 && (r.rows[0].pan_number || r.rows[0].icegate_code)) {
+        profileRow = r.rows[0];
+      }
+    }
+
+    if (!profileRow.pan_number && !profileRow.icegate_code) {
+      // Try by MAWB creator + location
+      const creatorId = mawbRow.created_by || req.user?.id;
+      const r = await dbq('gen-cgm:profile[2-creator+loc]',
+        `SELECT * FROM profiles WHERE user_id = $1 AND (location_code = $2 OR customs_house_code = $2)
+         ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
+        [creatorId, custCode]
+      );
+      logger.info('SQL', `[gen-cgm:profile[2-creator+loc]] creatorId=${creatorId} loc=${custCode} rows=${r.rows.length} pan=${r.rows[0]?.pan_number} icegate=${r.rows[0]?.icegate_code}`);
+      if (r.rows.length > 0) profileRow = r.rows[0];
+    }
+
+    if (!profileRow.pan_number && !profileRow.icegate_code) {
+      // Try by req.user + location
+      const r = await dbq('gen-cgm:profile[3-requser+loc]',
+        `SELECT * FROM profiles WHERE user_id = $1 AND (location_code = $2 OR customs_house_code = $2)
+         ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
+        [req.user?.id, custCode]
+      );
+      logger.info('SQL', `[gen-cgm:profile[3-requser+loc]] req.user=${req.user?.id} loc=${custCode} rows=${r.rows.length} pan=${r.rows[0]?.pan_number} icegate=${r.rows[0]?.icegate_code}`);
+      if (r.rows.length > 0) profileRow = r.rows[0];
+    }
+
+    if (!profileRow.pan_number && !profileRow.icegate_code) {
+      // Last resort: any profile for this location
+      const r = await dbq('gen-cgm:profile[4-loc-only]',
+        `SELECT * FROM profiles WHERE (location_code = $1 OR customs_house_code = $1)
+         AND pan_number IS NOT NULL ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
+        [custCode]
+      );
+      logger.info('SQL', `[gen-cgm:profile[4-loc-only]] loc=${custCode} rows=${r.rows.length} pan=${r.rows[0]?.pan_number} icegate=${r.rows[0]?.icegate_code}`);
+      if (r.rows.length > 0) profileRow = r.rows[0];
+    }
+
+    logger.info('TRANSMISSIONS', `Profile for CGM: mawb_creator=${mawbRow.created_by} loc=${custCode} → profile_id=${profileRow.id} pan=${profileRow.pan_number} icegate=${profileRow.icegate_code}`);
+
+    const hawbResult = await dbq('gen-cgm:hawbs', 'SELECT * FROM hawbs WHERE mawb_id = $1 ORDER BY created_at ASC', [req.params.mawbId]);
+    logger.info('SQL', `[gen-cgm:hawbs] mawb_id=${req.params.mawbId} hawb_count=${hawbResult.rows.length}`);
+
+    // Auto-derive customs house code
     const dest3 = (mawbRow.destination || '').trim().substring(0, 3).toUpperCase();
     const derivedChc = dest3.length === 3 ? `IN${dest3}4` : '';
-    const customsCode = (mawbRow.customs_house_code || mawbRow.p_customs_code || derivedChc || '').trim();
-    const locationCode = mawbRow.p_location || customsCode;
-    // Consol Agent ID for consmaster/conshouse field 2 (PAN-based, max 16 chars)
-    const consolAgentId = (mawbRow.pan_number || mawbRow.carn_number || '').trim();
-    // Sender ID for HREC — icegate_code preferred, fallback to consol_agent_id / carn_number
-    const senderCode = (mawbRow.icegate_code || mawbRow.consol_agent_id || mawbRow.carn_number || '').trim();
+    const customsCode = (mawbRow.customs_house_code || profileRow.customs_house_code || derivedChc || '').trim();
+    const locationCode = profileRow.location_code || profileRow.customs_house_code || customsCode;
+
+    // PAN number (field 2 in consmaster/conshouse) — from profile
+    const consolAgentId = (profileRow.pan_number || profileRow.carn_number || '').trim();
+    // Sender ID for HREC — icegate_code from profile
+    const senderCode = (profileRow.icegate_code || profileRow.consol_agent_id || '').trim();
     // Username prefix: first 3 chars of username in uppercase
     const userPrefix = (req.user?.username?.substring(0, 3).toUpperCase() || '').trim();
 
+    // MAWB number stripped of any -A/-P/-D suffix (always 11 digits in CGM)
+    const baseMawbNo = stripSuffix(mawbRow.mawb_no);
+
     // Get control number per user+location
-    const profileId = mawbRow.profile_id;
+    const profileId = mawbRow.profile_id || profileRow.id || null;
     const userId = req.user?.id;
     let controlNum = 1;
     if (userId) {
@@ -87,7 +149,7 @@ router.post('/generate-cgm/:mawbId', async (req: AuthRequest, res: Response): Pr
       igm_date: mawbRow.igm_date,
       flight_no: mawbRow.flight_no || '',
       flight_origin_date: mawbRow.flight_origin_date,
-      mawb_no: mawbRow.mawb_no,
+      mawb_no: baseMawbNo,
       mawb_date: mawbRow.mawb_date,
       origin: mawbRow.origin,
       destination: mawbRow.destination,
@@ -98,16 +160,16 @@ router.post('/generate-cgm/:mawbId', async (req: AuthRequest, res: Response): Pr
       message_type: mawbRow.message_type || 'F',
     };
 
-    const hawbData: HawbData[] = hawbResult.rows.map(h => ({
+    const hawbData: HawbData[] = hawbResult.rows.map((h: any) => ({
       carn_number: consolAgentId,
       customs_house_code: customsCode,
       igm_no: mawbRow.igm_no || '',
       igm_date: mawbRow.igm_date,
       flight_no: mawbRow.flight_no || '',
       flight_origin_date: mawbRow.flight_origin_date,
-      mawb_no: mawbRow.mawb_no,
+      mawb_no: baseMawbNo,
       mawb_date: mawbRow.mawb_date,
-      hawb_no: h.hawb_no,
+      hawb_no: stripSuffix(h.hawb_no),
       hawb_date: h.hawb_date,
       origin: h.origin,
       destination: h.destination,
@@ -125,9 +187,9 @@ router.post('/generate-cgm/:mawbId', async (req: AuthRequest, res: Response): Pr
       testMode: false,
     });
 
-    // Build filename: CustomsCode + PAN + UserPrefix + ControlNum + .cgm
-    const panStr = (mawbRow.pan_number || mawbRow.carn_number || '').substring(0, 10).toUpperCase();
-    const companyPrefix = userPrefix || (mawbRow.company_name || '').replace(/\s+/g, '').substring(0, 3).toUpperCase();
+    // Build filename: CustomsCode + PAN(10) + UserPrefix(3) + ControlNum(4padded) + .cgm
+    const panStr = (profileRow.pan_number || profileRow.carn_number || '').substring(0, 10).toUpperCase();
+    const companyPrefix = userPrefix || (profileRow.company_name || '').replace(/\s+/g, '').substring(0, 3).toUpperCase();
     const fileName = generateCGMFileName(customsCode, panStr, companyPrefix, controlNum);
 
     // Save transmission record
@@ -163,32 +225,68 @@ router.get('/preview-cgm/:mawbId', async (req: AuthRequest, res: Response): Prom
     );
     if (mawbResult.rows.length === 0) { res.status(404).json({ message: 'MAWB not found' }); return; }
     const mawbRow = mawbResult.rows[0];
+
+    // Cascade profile lookup (same 4-level as generate-cgm)
+    const custCodeP = (mawbRow.customs_house_code || '').trim();
+    let profileRowP: any = {};
+
+    if (mawbRow.profile_id) {
+      const r = await pool.query('SELECT * FROM profiles WHERE id = $1', [mawbRow.profile_id]);
+      if (r.rows.length > 0 && (r.rows[0].pan_number || r.rows[0].icegate_code)) profileRowP = r.rows[0];
+    }
+    if (!profileRowP.pan_number && !profileRowP.icegate_code) {
+      const creatorId = mawbRow.created_by || req.user?.id;
+      const r = await pool.query(
+        `SELECT * FROM profiles WHERE user_id = $1 AND (location_code = $2 OR customs_house_code = $2)
+         ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
+        [creatorId, custCodeP]
+      );
+      if (r.rows.length > 0) profileRowP = r.rows[0];
+    }
+    if (!profileRowP.pan_number && !profileRowP.icegate_code) {
+      const r = await pool.query(
+        `SELECT * FROM profiles WHERE user_id = $1 AND (location_code = $2 OR customs_house_code = $2)
+         ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
+        [req.user?.id, custCodeP]
+      );
+      if (r.rows.length > 0) profileRowP = r.rows[0];
+    }
+    if (!profileRowP.pan_number && !profileRowP.icegate_code) {
+      const r = await pool.query(
+        `SELECT * FROM profiles WHERE (location_code = $1 OR customs_house_code = $1)
+         AND pan_number IS NOT NULL ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
+        [custCodeP]
+      );
+      if (r.rows.length > 0) profileRowP = r.rows[0];
+    }
+
     const hawbResult = await pool.query('SELECT * FROM hawbs WHERE mawb_id = $1', [req.params.mawbId]);
 
     const dest3p = (mawbRow.destination || '').trim().substring(0, 3).toUpperCase();
     const derivedChcP = dest3p.length === 3 ? `IN${dest3p}4` : '';
-    const customsCode = (mawbRow.customs_house_code || mawbRow.p_customs_code || derivedChcP || '').trim();
-    const consolAgentId = (mawbRow.pan_number || mawbRow.carn_number || '').trim();
-    const senderCode = (mawbRow.icegate_code || mawbRow.consol_agent_id || mawbRow.carn_number || '').trim();
+    const customsCode = (mawbRow.customs_house_code || profileRowP.customs_house_code || derivedChcP || '').trim();
+    const consolAgentId = (profileRowP.pan_number || profileRowP.carn_number || '').trim();
+    const senderCode = (profileRowP.icegate_code || profileRowP.consol_agent_id || '').trim();
     const userPrefix = (req.user?.username?.substring(0, 3).toUpperCase() || '').trim();
+    const baseMawbNo = stripSuffix(mawbRow.mawb_no);
     const controlNumber = `${userPrefix}PREVIEW`;
 
     const mawbData: MawbData = {
       carn_number: consolAgentId, customs_house_code: customsCode,
       igm_no: mawbRow.igm_no, igm_date: mawbRow.igm_date,
       flight_no: mawbRow.flight_no, flight_origin_date: mawbRow.flight_origin_date,
-      mawb_no: mawbRow.mawb_no, mawb_date: mawbRow.mawb_date,
+      mawb_no: baseMawbNo, mawb_date: mawbRow.mawb_date,
       origin: mawbRow.origin, destination: mawbRow.destination,
       shipment_type: 'T', total_packages: mawbRow.total_packages,
       gross_weight: parseFloat(mawbRow.gross_weight),
       item_description: 'CONSOL', message_type: mawbRow.message_type || 'F',
     };
-    const hawbData: HawbData[] = hawbResult.rows.map(h => ({
+    const hawbData: HawbData[] = hawbResult.rows.map((h: any) => ({
       carn_number: consolAgentId, customs_house_code: customsCode,
       igm_no: mawbRow.igm_no, igm_date: mawbRow.igm_date,
       flight_no: mawbRow.flight_no, flight_origin_date: mawbRow.flight_origin_date,
-      mawb_no: mawbRow.mawb_no, mawb_date: mawbRow.mawb_date,
-      hawb_no: h.hawb_no, hawb_date: h.hawb_date,
+      mawb_no: baseMawbNo, mawb_date: mawbRow.mawb_date,
+      hawb_no: stripSuffix(h.hawb_no), hawb_date: h.hawb_date,
       origin: h.origin, destination: h.destination,
       shipment_type: 'T', total_packages: h.total_packages,
       gross_weight: parseFloat(h.gross_weight),
@@ -199,8 +297,8 @@ router.get('/preview-cgm/:mawbId', async (req: AuthRequest, res: Response): Prom
     const fileContent = generateCGM(mawbData, hawbData, {
       senderCode, receiverCode: customsCode, controlNumber, testMode: false,
     });
-    const panStr = (mawbRow.pan_number || mawbRow.carn_number || '').substring(0, 10).toUpperCase();
-    const companyPrefix = userPrefix || (mawbRow.company_name || '').replace(/\s+/g, '').substring(0, 3).toUpperCase();
+    const panStr = (profileRowP.pan_number || profileRowP.carn_number || '').substring(0, 10).toUpperCase();
+    const companyPrefix = userPrefix || (profileRowP.company_name || '').replace(/\s+/g, '').substring(0, 3).toUpperCase();
     const fileName = generateCGMFileName(customsCode, panStr, companyPrefix, 0);
     res.json({ file_name: fileName, content: fileContent, hawb_count: hawbResult.rows.length });
   } catch (err) {

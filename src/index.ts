@@ -4,6 +4,7 @@ dns.setDefaultResultOrder('ipv4first'); // Fix: Supabase ENOTFOUND on Windows No
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import pool from '../src/db';
 
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
@@ -55,8 +56,14 @@ app.use((req: express.Request, res: express.Response, next: express.NextFunction
 });
 
 // Health check
-app.get('/health', (_req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+app.get('/health', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  } catch (error) {
+    logger.error('SERVER', 'Health check failed', error);
+    res.status(500).json({ status: 'ERROR', timestamp: new Date().toISOString() });
+  }
 });
 
 // Routes

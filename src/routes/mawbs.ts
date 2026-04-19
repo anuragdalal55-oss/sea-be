@@ -72,7 +72,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     const offsetIdx = params.length + 2;
 
     const result = await pool.query(
-      `SELECT m.*, p.profile_code, p.company_name,
+      `SELECT m.*, p.profile_code, p.company_name, p.icegate_code, p.pan_number,
               (SELECT COUNT(*) FROM hawbs h WHERE h.mawb_id = m.id) as hawb_count
        FROM mawbs m LEFT JOIN profiles p ON m.profile_id = p.id
        ${where}

@@ -13,26 +13,32 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
     if (isAdmin) {
-      const result = await pool.query('SELECT * FROM locations WHERE is_active=TRUE ORDER BY iata_code');
+      // Admins see all active Indian locations only
+      const result = await pool.query(
+        `SELECT * FROM locations WHERE is_active=TRUE AND country = 'India' ORDER BY iata_code`
+      );
       res.json(result.rows);
       return;
     }
 
     // Check if user has specific location assignments
     const assignResult = await pool.query(
-      'SELECT location_id FROM user_locations WHERE user_id = $1',
-      [req.user?.id]
+      'SELECT location_id FROM user_locations WHERE user_id = $1  AND country = $2 ORDER BY iata_code',
+      [req.user?.id, 'India']
     );
 
     if (assignResult.rows.length === 0) {
-      // No restrictions assigned — show all
-      const result = await pool.query('SELECT * FROM locations WHERE is_active=TRUE ORDER BY iata_code');
+      // No restrictions assigned — show all Indian locations
+      const result = await pool.query(
+        `SELECT * FROM locations WHERE is_active=TRUE AND country = 'India' ORDER BY iata_code`
+      );
       res.json(result.rows);
     } else {
+      // Show only assigned Indian locations
       const locationIds = assignResult.rows.map(r => r.location_id);
       const placeholders = locationIds.map((_: any, i: number) => `$${i + 1}`).join(',');
       const result = await pool.query(
-        `SELECT * FROM locations WHERE id IN (${placeholders}) AND is_active=TRUE ORDER BY iata_code`,
+        `SELECT * FROM locations WHERE id IN (${placeholders}) AND is_active=TRUE AND country = 'India' ORDER BY iata_code`,
         locationIds
       );
       res.json(result.rows);

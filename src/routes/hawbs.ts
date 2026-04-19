@@ -93,9 +93,14 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
     return;
   }
   try {
-    const mawbResult = await pool.query('SELECT message_type, origin, destination FROM mawbs WHERE id = $1', [mawb_id]);
+    const mawbResult = await pool.query('SELECT message_type, origin, destination, status FROM mawbs WHERE id = $1', [mawb_id]);
     if (mawbResult.rows.length === 0) { res.status(404).json({ message: 'MAWB not found' }); return; }
     const mawb = mawbResult.rows[0];
+
+    if (mawb.status !== 'draft') {
+      res.status(400).json({ message: 'Cannot add HAWB to a transmitted MAWB. Use Amend or Part to make changes.' });
+      return;
+    }
 
     const dupCheck = await pool.query('SELECT id FROM hawbs WHERE hawb_no = $1', [hawb_no]);
     if (dupCheck.rows.length > 0) {
@@ -129,13 +134,18 @@ router.post('/batch', async (req: AuthRequest, res: Response): Promise<void> => 
   const client = await pool.connect();
   try {
     const mawbResult = await client.query(
-      'SELECT message_type, origin, destination FROM mawbs WHERE id = $1', [mawb_id]
+      'SELECT message_type, origin, destination, status FROM mawbs WHERE id = $1', [mawb_id]
     );
     if (mawbResult.rows.length === 0) {
       res.status(404).json({ message: 'MAWB not found' });
       return; // finally will release the client
     }
     const mawb = mawbResult.rows[0];
+
+    if (mawb.status !== 'draft') {
+      res.status(400).json({ message: 'Cannot add HAWBs to a transmitted MAWB. Use Amend or Part to make changes.' });
+      return;
+    }
 
     await client.query('BEGIN');
     const created = [];

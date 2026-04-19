@@ -54,12 +54,12 @@ export interface GenerateOptions {
 
 function formatDate(dateStr?: string | Date): string {
   if (!dateStr) return '';
-  const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in ms
-  const d = new Date(new Date().getTime() + istOffset);
+  const d = new Date(dateStr);
   if (isNaN(d.getTime())) return '';
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const yyyy = d.getFullYear();
+  // Use UTC to avoid timezone shifts for date-only values stored in DB
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const yyyy = d.getUTCFullYear();
   return `${dd}${mm}${yyyy}`;
 }
 
