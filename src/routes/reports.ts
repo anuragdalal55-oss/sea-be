@@ -7,33 +7,45 @@ const router = Router();
 router.use(authenticate);
 
 // ─── Checklist Report ─────────────────────────────────────────────────────────
-// Returns all MAWBs with their HAWB counts and transmission status
+// Returns paginated MAWBs with their HAWB counts and transmission status
 router.get('/checklist', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { from_date, to_date, profile_id, status } = req.query;
-    const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
-    let query = `
-      SELECT m.*,
-        p.profile_code, p.company_name,
-        (SELECT COUNT(*) FROM hawbs h WHERE h.mawb_id = m.id) as hawb_count,
-        (SELECT COALESCE(SUM(h.total_packages), 0) FROM hawbs h WHERE h.mawb_id = m.id) as hawb_total_packages,
-        (SELECT COALESCE(SUM(h.gross_weight), 0) FROM hawbs h WHERE h.mawb_id = m.id) as hawb_total_weight,
-        u.username as created_by_name
+    const page     = Math.max(1, parseInt(String(req.query.page     || '1')));
+    const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || '25'))));
+    const offset   = (page - 1) * pageSize;
+    const isAdmin  = req.user?.role === 'master_admin' || req.user?.role === 'admin';
+
+    const base = `
       FROM mawbs m
       LEFT JOIN profiles p ON m.profile_id = p.id
       LEFT JOIN users u ON m.created_by = u.id
       WHERE 1=1`;
     const params: any[] = [];
+    let filters = '';
     let idx = 1;
-    if (from_date) { query += ` AND m.created_at >= $${idx++}`; params.push(from_date); }
-    if (to_date) { query += ` AND m.created_at <= $${idx++}`; params.push(to_date + ' 23:59:59'); }
-    if (profile_id) { query += ` AND m.profile_id = $${idx++}`; params.push(profile_id); }
-    if (status) { query += ` AND m.status = $${idx++}`; params.push(status); }
-    // Non-admins see only their own MAWBs
-    if (!isAdmin) { query += ` AND m.created_by = $${idx++}`; params.push(req.user?.id); }
-    query += ' ORDER BY m.created_at DESC';
-    const result = await pool.query(query, params);
-    res.json(result.rows);
+    if (from_date) { filters += ` AND m.created_at >= $${idx++}`; params.push(from_date); }
+    if (to_date)   { filters += ` AND m.created_at <= $${idx++}`; params.push(to_date + ' 23:59:59'); }
+    if (profile_id){ filters += ` AND m.profile_id = $${idx++}`; params.push(profile_id); }
+    if (status)    { filters += ` AND m.status = $${idx++}`; params.push(status); }
+    if (!isAdmin)  { filters += ` AND m.created_by = $${idx++}`; params.push(req.user?.id); }
+
+    const countResult = await pool.query(`SELECT COUNT(*) ${base}${filters}`, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    const dataResult = await pool.query(
+      `SELECT m.*,
+         p.profile_code, p.company_name,
+         (SELECT COUNT(*) FROM hawbs h WHERE h.mawb_id = m.id) as hawb_count,
+         (SELECT COALESCE(SUM(h.total_packages), 0) FROM hawbs h WHERE h.mawb_id = m.id) as hawb_total_packages,
+         (SELECT COALESCE(SUM(h.gross_weight), 0) FROM hawbs h WHERE h.mawb_id = m.id) as hawb_total_weight,
+         u.username as created_by_name
+       ${base}${filters}
+       ORDER BY m.created_at DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...params, pageSize, offset]
+    );
+    res.json({ data: dataResult.rows, total, page, pageSize });
   } catch (err) {
     logger.error('REPORTS', 'GET /checklist error', err);
     res.status(500).json({ message: 'Server error' });
@@ -154,8 +166,8 @@ router.get('/consol-statement', async (req: AuthRequest, res: Response): Promise
     const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
     const { from_date, to_date, user_id } = req.query;
     const exportAll = req.query.export === 'true';
-    const page = Math.max(1, parseInt(String(req.query.page || '1')));
-    const pageSize = 100;
+    const page     = Math.max(1, parseInt(String(req.query.page     || '1')));
+    const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || '25'))));
 
     const params: any[] = [];
     let filters = '';

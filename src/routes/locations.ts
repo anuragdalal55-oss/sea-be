@@ -23,7 +23,10 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
 
     // Check if user has specific location assignments
     const assignResult = await pool.query(
-      'SELECT location_id FROM user_locations WHERE user_id = $1  AND country = $2 ORDER BY iata_code',
+      `SELECT ul.location_id FROM user_locations ul
+       JOIN locations l ON l.id = ul.location_id
+       WHERE ul.user_id = $1 AND l.country = $2
+       ORDER BY l.iata_code`,
       [req.user?.id, 'India']
     );
 

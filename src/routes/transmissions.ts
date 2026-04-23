@@ -311,26 +311,41 @@ router.get('/preview-cgm/:mawbId', async (req: AuthRequest, res: Response): Prom
 router.get('/history', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
+    const page     = Math.max(1, parseInt(String(req.query.page     || '1')));
+    const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || '25'))));
+    const offset   = (page - 1) * pageSize;
+
     const params: any[] = [];
     let where = '';
     if (!isAdmin) {
       where = 'WHERE t.sent_by = $1';
       params.push(req.user?.id);
     }
+
+    const baseFrom = `
+      FROM transmissions t
+      LEFT JOIN mawbs m ON t.mawb_id = m.id
+      LEFT JOIN users u ON t.sent_by = u.id
+      LEFT JOIN profiles p ON t.profile_id = p.id
+      ${where}`;
+
+    const countResult = await pool.query(`SELECT COUNT(*) ${baseFrom}`, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    const limitIdx  = params.length + 1;
+    const offsetIdx = params.length + 2;
+
     const result = await pool.query(
       `SELECT t.id, t.transmission_type, t.file_name, t.sent_at, t.status,
               t.mawb_id, m.mawb_no, u.username,
               (SELECT COUNT(*) FROM hawbs WHERE mawb_id = t.mawb_id) as hawb_count,
               p.customs_house_code as location, p.pan_number
-       FROM transmissions t
-       LEFT JOIN mawbs m ON t.mawb_id = m.id
-       LEFT JOIN users u ON t.sent_by = u.id
-       LEFT JOIN profiles p ON t.profile_id = p.id
-       ${where}
-       ORDER BY t.sent_at DESC LIMIT 200`,
-      params
+       ${baseFrom}
+       ORDER BY t.sent_at DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      [...params, pageSize, offset]
     );
-    res.json(result.rows);
+    res.json({ data: result.rows, total, page, pageSize });
   } catch (err) {
     logger.error('TRANSMISSIONS', 'GET /history error', err);
     res.status(500).json({ message: 'Server error' });

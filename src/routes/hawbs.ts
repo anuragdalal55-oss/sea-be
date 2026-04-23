@@ -34,9 +34,6 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     const params: any[] = [];
     const conditions: string[] = [];
 
-    // Show only HAWBs whose parent MAWB has not been transmitted yet.
-    conditions.push(`(m.transmission_date IS NULL AND COALESCE(m.status, 'draft') <> 'transmitted')`);
-
     if (mawb_id) {
       conditions.push(`h.mawb_id = $${params.length + 1}`);
       params.push(mawb_id);
