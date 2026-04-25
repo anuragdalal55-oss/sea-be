@@ -5,7 +5,7 @@
  * Record delimiter: newline (ASCII 10)
  */
 
-const FS = '\x1c'; // ASCII 28 - field separator
+const GS = '\x1d'; // ASCII 28 - field separator
 
 export interface MawbData {
   carn_number: string;         // Consol Agent ID (PAN-based, field 2 of consmaster)
@@ -96,7 +96,7 @@ export function generateCGM(
   const header = [
     'HREC', 'ZZ', sender, 'ZZ', receiver,
     'ICES1_5', mode, '', 'CMCHI01', controlNo, date, time
-  ].join(FS);
+  ].join(GS);
 
   // Consol Master line (consmaster - 15 fields)
   const m = mawb;
@@ -117,7 +117,7 @@ export function generateCGM(
     String(m.total_packages),
     m.gross_weight.toFixed(2),
     m.item_description || 'CONSOL',
-  ].join(FS);
+  ].join(GS);
 
   // House lines (conshouse - 17 fields each)
   const houseLines = hawbs.map(h => {
@@ -140,7 +140,7 @@ export function generateCGM(
       String(h.total_packages),
       h.gross_weight.toFixed(2),
       h.item_description,
-    ].join(FS);
+    ].join(GS);
   }).join('\n');
 
   const content = [
@@ -153,7 +153,7 @@ export function generateCGM(
     houseLines,
     '<END-conshouse>',
     '<END-consoligm>',
-    `TREC${FS}${controlNo}`,
+    `TREC${GS}${controlNo}`,
   ].join('\n');
 
   return content;
