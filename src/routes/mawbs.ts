@@ -112,6 +112,137 @@ router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   }
 });
 
+// Create MAWB with optional HAWBs in one transaction
+router.post('/with-hawbs', async (req: AuthRequest, res: Response): Promise<void> => {
+  const {
+    mawb_no,
+    mawb_date,
+    origin,
+    destination,
+    total_packages,
+    gross_weight,
+    customs_house_code,
+    profile_id,
+    hawbs,
+  } = req.body;
+
+  if (!mawb_no || !origin || !destination) {
+    res.status(400).json({ message: 'mawb_no, origin, destination required' });
+    return;
+  }
+
+  if (!/^\d+$/.test(mawb_no)) {
+    res.status(400).json({ message: 'MAWB number must contain digits only' });
+    return;
+  }
+
+  const incomingHawbs = Array.isArray(hawbs) ? hawbs : [];
+  const preparedHawbs = incomingHawbs
+    .map((row: any, index: number) => {
+      const hawbNo = String(row?.hawb_no || '').trim();
+      const itemDescription = String(row?.item_description || '').trim();
+      const totalPackagesText = String(row?.total_packages ?? '').trim();
+      const grossWeightText = String(row?.gross_weight ?? '').trim();
+
+      return {
+        rowNo: index + 1,
+        hawb_no: hawbNo,
+        origin: String(row?.origin || '').trim() || origin,
+        destination: String(row?.destination || '').trim() || destination,
+        total_packages: totalPackagesText,
+        gross_weight: grossWeightText,
+        item_description: itemDescription,
+        hasData: Boolean(hawbNo || totalPackagesText || grossWeightText || itemDescription),
+      };
+    })
+    .filter((row: any) => row.hasData);
+
+  const seenHawbs = new Set<string>();
+  for (const row of preparedHawbs) {
+    if (!row.hawb_no) {
+      res.status(400).json({ message: `HAWB number is required for row ${row.rowNo}.` });
+      return;
+    }
+    if (!row.origin || !row.destination) {
+      res.status(400).json({ message: `Origin and destination are required for HAWB row ${row.rowNo}.` });
+      return;
+    }
+
+    const hawbKey = row.hawb_no.toUpperCase();
+    if (seenHawbs.has(hawbKey)) {
+      res.status(400).json({ message: `Duplicate HAWB number "${row.hawb_no}" in the same save request.` });
+      return;
+    }
+    seenHawbs.add(hawbKey);
+  }
+
+  const client = await pool.connect();
+  let transactionStarted = false;
+
+  try {
+    await client.query('BEGIN');
+    transactionStarted = true;
+
+    const existingMawb = await client.query('SELECT id FROM mawbs WHERE mawb_no = $1', [mawb_no]);
+    if (existingMawb.rows.length > 0) {
+      await client.query('ROLLBACK');
+      transactionStarted = false;
+      res.status(400).json({ message: 'MAWB number already exists. Please use a unique MAWB number.' });
+      return;
+    }
+
+    const mawbResult = await client.query(
+      `INSERT INTO mawbs (mawb_no, mawb_date, origin, destination, shipment_type,
+        total_packages, gross_weight, item_description, customs_house_code,
+        profile_id, created_by, message_type, status)
+       VALUES ($1,$2,$3,$4,'T',$5,$6,'CONSOL',$7,$8,$9,'F','draft') RETURNING *`,
+      [mawb_no, toDateOrNull(mawb_date), origin, destination,
+       toNumOrNull(total_packages) || 0, toNumOrNull(gross_weight) || 0,
+       customs_house_code || null, profile_id || null, req.user?.id]
+    );
+
+    const createdMawb = mawbResult.rows[0];
+    const createdHawbs: any[] = [];
+
+    for (const row of preparedHawbs) {
+      const existingHawb = await client.query('SELECT id FROM hawbs WHERE hawb_no = $1', [row.hawb_no]);
+      if (existingHawb.rows.length > 0) {
+        await client.query('ROLLBACK');
+        transactionStarted = false;
+        res.status(400).json({ message: `HAWB number "${row.hawb_no}" already exists.` });
+        return;
+      }
+
+      const hawbResult = await client.query(
+        `INSERT INTO hawbs (mawb_id, hawb_no, origin, destination, shipment_type,
+          total_packages, gross_weight, item_description, profile_id, created_by, message_type)
+         VALUES ($1,$2,$3,$4,'T',$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [createdMawb.id, row.hawb_no, row.origin, row.destination,
+         toNumOrNull(row.total_packages) || 0, toNumOrNull(row.gross_weight) || 0,
+         row.item_description || null, req.user?.profile_id, req.user?.id, createdMawb.message_type || 'F']
+      );
+      createdHawbs.push(hawbResult.rows[0]);
+    }
+
+    await client.query('COMMIT');
+    transactionStarted = false;
+
+    logger.info(
+      'MAWBS',
+      `Created MAWB with inline HAWBs: ${mawb_no} (${createdHawbs.length} HAWBs) by user=${req.user?.id}`
+    );
+    res.status(201).json({ mawb: createdMawb, hawbs: createdHawbs });
+  } catch (err) {
+    if (transactionStarted) {
+      await client.query('ROLLBACK');
+    }
+    logger.error('MAWBS', `POST /with-hawbs error (mawb_no=${req.body.mawb_no})`, err);
+    res.status(500).json({ message: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
 // Create MAWB (Fresh - message_type F)
 router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
   const { mawb_no, mawb_date, origin, destination, total_packages, gross_weight, customs_house_code, profile_id } = req.body;

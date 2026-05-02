@@ -352,6 +352,30 @@ router.get('/history', async (req: AuthRequest, res: Response): Promise<void> =>
   }
 });
 
+// Return the latest unsigned CGM content for a MAWB so signing can reuse it
+// without calling generate-cgm again (which would increment the control number).
+router.get('/latest/:mawbId', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await pool.query(
+      `SELECT file_name, file_content FROM transmissions
+       WHERE mawb_id = $1
+         AND transmission_type = 'CGM'
+         AND file_content NOT LIKE '%<START-SIGNATURE>%'
+       ORDER BY sent_at DESC LIMIT 1`,
+      [req.params.mawbId]
+    );
+    if (result.rows.length === 0) {
+      res.status(404).json({ message: 'No transmission found' });
+      return;
+    }
+    const t = result.rows[0];
+    res.json({ fileName: t.file_name, fileContent: t.file_content });
+  } catch (err) {
+    logger.error('TRANSMISSIONS', `GET /latest/${req.params.mawbId} error`, err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Re-download a stored transmission file by ID (uses stored filename)
 router.get('/download/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
