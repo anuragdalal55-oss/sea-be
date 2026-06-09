@@ -99,17 +99,17 @@ router.put('/user/:userId', requireRole(['master_admin', 'admin']), async (req: 
 
 // POST /locations — add new location (admin+)
 router.post('/', requireRole(['master_admin', 'admin']), async (req: AuthRequest, res: Response): Promise<void> => {
-  const { iata_code, city_name, country } = req.body;
+  const { iata_code, city_name, country, customs_house_code } = req.body;
   if (!iata_code || !city_name) {
     res.status(400).json({ message: 'iata_code and city_name required' });
     return;
   }
   try {
-    const code = iata_code.toUpperCase().substring(0, 3);
-    const chc = `IN${code}4`;
+    const code = String(iata_code).trim().toUpperCase();
+    const chc = String(customs_house_code || '').trim().toUpperCase() || code;
     const result = await pool.query(
       'INSERT INTO locations (iata_code, city_name, country, customs_house_code) VALUES ($1, $2, $3, $4) RETURNING *',
-      [code, city_name, country, chc]
+      [code, city_name, country || 'India', chc]
     );
     res.status(201).json(result.rows[0]);
   } catch (err: any) {

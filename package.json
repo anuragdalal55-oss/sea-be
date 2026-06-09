@@ -1,5 +1,5 @@
 {
-  "name": "ediss-backend",
+  "name": "ediss-sea-backend",
   "version": "1.0.0",
   "description": "EDISS - Electronic Data Interchange for Shipping System - Backend",
   "main": "dist/index.js",
@@ -10,7 +10,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "prebuild": "rm -rf dist",
+    "prebuild": "node -e \"try{require('fs').rmSync('dist',{ recursive: true, force: true, maxRetries: 5, retryDelay: 150 })}catch(e){}\"",
     "seed": "ts-node src/seeder.ts"
   },
   "dependencies": {

@@ -1,222 +1,276 @@
-/**
- * EDISS Database Seeder
- * Run: npm run seed
- */
-
 import dns from 'dns';
 dns.setDefaultResultOrder('ipv4first');
 
-import pool from './db';
 import bcrypt from 'bcryptjs';
+import pool from './db';
 
 async function seed() {
   const client = await pool.connect();
-  console.log('✅ Connected to database');
+  console.log('Connected to sea database');
 
   try {
     await client.query('BEGIN');
 
-    // ── 1. Profiles ──────────────────────────────────────────────────────────
-    console.log('Seeding profiles...');
+    await client.query(`
+      INSERT INTO locations (iata_code, city_name, customs_house_code, country)
+      VALUES
+        ('NSA1', 'Nhava Sheva Port', 'INNSA1', 'India'),
+        ('PAV1', 'Pipavav Port', 'INPAV1', 'India'),
+        ('MUN1', 'Mundra Port', 'INMUN1', 'India'),
+        ('MAA1', 'Chennai Port', 'INMAA1', 'India'),
+        ('CCU1', 'Kolkata Sea', 'INCCU1', 'India'),
+        ('BOM1', 'Mumbai Customs', 'INBOM1', 'India')
+      ON CONFLICT (iata_code) DO UPDATE
+      SET city_name = EXCLUDED.city_name,
+          customs_house_code = EXCLUDED.customs_house_code,
+          country = EXCLUDED.country
+    `);
 
-    const p1 = await client.query(`
-      INSERT INTO profiles (
-        profile_code, company_name, address, city, state, country,
-        phone, email, carn_number, customs_house_code, icegate_code,
-        pan_number, user_prefix, consol_agent_id, user_email, agent_name,
-        address1, address2, gstin, billing_company, billing_state,
-        gst_rate, pan_for_invoice, air_igm_rate, sea_consol_lcl_rate,
-        sea_consol_fcl_rate, air_manifest_rate, air_manifest_min_bill, location_code
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
-      ON CONFLICT (profile_code) DO UPDATE SET
-        company_name = EXCLUDED.company_name, pan_number = EXCLUDED.pan_number,
-        user_prefix = EXCLUDED.user_prefix, consol_agent_id = EXCLUDED.consol_agent_id,
-        location_code = EXCLUDED.location_code
-      RETURNING id
-    `, [
-      'INDEL4','Swift Air Cargo Delhi','15, Cargo Complex, IGI Airport','New Delhi','Delhi','India',
-      '011-25675890','delhi@swiftcargo.in','AGSYE7618HCNDEL4','INDEL4','SWIFTDEL001',
-      'AGSYE7618H','SWIFT','DEL-CONSOL-001','ops.delhi@swiftcargo.in','Rajesh Kumar',
-      '15, Cargo Complex','IGI Airport, New Delhi','07AGSYE7618H1ZX','Swift Air Cargo Pvt Ltd','Delhi',
-      18,'AGSYE7618H',150.00,200.00,180.00,120.00,5000.00,'INDEL4'
-    ]);
-    const delProfileId = p1.rows[0].id;
-
-    const p2 = await client.query(`
-      INSERT INTO profiles (
-        profile_code, company_name, address, city, state, country,
-        phone, email, carn_number, customs_house_code, icegate_code,
-        pan_number, user_prefix, consol_agent_id, user_email, agent_name,
-        address1, address2, gstin, billing_company, billing_state,
-        gst_rate, pan_for_invoice, air_igm_rate, sea_consol_lcl_rate,
-        sea_consol_fcl_rate, air_manifest_rate, air_manifest_min_bill, location_code
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
-      ON CONFLICT (profile_code) DO UPDATE SET
-        company_name = EXCLUDED.company_name, pan_number = EXCLUDED.pan_number,
-        location_code = EXCLUDED.location_code
-      RETURNING id
-    `, [
-      'INBOM4','Speedy Freight Mumbai','Unit 4, Air Cargo Complex, CSIA','Mumbai','Maharashtra','India',
-      '022-66754321','mumbai@speedyfreight.in','BFSPY1234HCNBOM4','INBOM4','SPEEDYBOM001',
-      'BFSPY1234H','SPDY','BOM-CONSOL-001','ops.mumbai@speedyfreight.in','Priya Sharma',
-      'Unit 4, Air Cargo Complex','CSIA, Mumbai','27BFSPY1234H1ZY','Speedy Freight Pvt Ltd','Maharashtra',
-      18,'BFSPY1234H',140.00,190.00,170.00,110.00,4500.00,'INBOM4'
-    ]);
-    const bomProfileId = p2.rows[0].id;
-
-    const p3 = await client.query(`
-      INSERT INTO profiles (
-        profile_code, company_name, address, city, state, country,
-        phone, email, carn_number, customs_house_code, icegate_code,
-        pan_number, user_prefix, consol_agent_id, user_email, agent_name,
-        address1, address2, gstin, billing_company, billing_state,
-        gst_rate, pan_for_invoice, air_igm_rate, sea_consol_lcl_rate,
-        sea_consol_fcl_rate, air_manifest_rate, air_manifest_min_bill, location_code
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
-      ON CONFLICT (profile_code) DO UPDATE SET
-        company_name = EXCLUDED.company_name, pan_number = EXCLUDED.pan_number,
-        location_code = EXCLUDED.location_code
-      RETURNING id
-    `, [
-      'INBLR4','Global Logistics Bangalore','Cargo Terminal, KIAL','Bangalore','Karnataka','India',
-      '080-25234567','blr@globallogistics.in','GLBLR5678HCNBLR4','INBLR4','GLOBALBLR001',
-      'GLBLR5678H','GLBL','BLR-CONSOL-001','ops.blr@globallogistics.in','Suresh Nair',
-      'Cargo Terminal','KIAL, Bangalore','29GLBLR5678H1ZZ','Global Logistics Pvt Ltd','Karnataka',
-      18,'GLBLR5678H',145.00,195.00,175.00,115.00,4800.00,'INBLR4'
-    ]);
-    const blrProfileId = p3.rows[0].id;
-
-    console.log('  → 3 profiles upserted');
-
-    // ── 2. Users ──────────────────────────────────────────────────────────────
-    console.log('Seeding users...');
-
-    const adminHash = await bcrypt.hash('admin123', 10);
-    const userHash  = await bcrypt.hash('user123', 10);
-
-    const insertUser = async (username: string, hash: string, full_name: string, email: string, role: string, profile_id: string) => {
-      const r = await client.query(`
-        INSERT INTO users (username, password_hash, full_name, email, role, profile_id, is_active)
-        VALUES ($1, $2, $3, $4, $5, $6, true)
-        ON CONFLICT (username) DO UPDATE SET
-          full_name = EXCLUDED.full_name, role = EXCLUDED.role, profile_id = EXCLUDED.profile_id
-        RETURNING id, username
-      `, [username, hash, full_name, email, role, profile_id]);
-      return r.rows[0];
-    };
-
-    const uAdmin  = await insertUser('admin',  adminHash, 'System Admin',   'admin@ediss.in',   'master_admin', delProfileId);
-    const uRobin  = await insertUser('robin',  adminHash, 'Robin Kumar',    'robin@ediss.in',   'admin',        delProfileId);
-    const uPriya  = await insertUser('priya',  userHash,  'Priya Sharma',   'priya@ediss.in',   'user',         bomProfileId);
-    const uSuresh = await insertUser('suresh', userHash,  'Suresh Nair',    'suresh@ediss.in',  'user',         blrProfileId);
-    const uAnkit  = await insertUser('ankit',  userHash,  'Ankit Verma',    'ankit@ediss.in',   'user',         delProfileId);
-
-    console.log(`  → 5 users upserted`);
-
-    // ── 3. MAWBs ──────────────────────────────────────────────────────────────
-    console.log('Seeding MAWBs...');
-
-    const insertMawb = async (
-      mawb_no: string, origin: string, dest: string, pkgs: number, wt: number,
-      status: string, profile_id: string, created_by: string, msg_type: string,
-      customs_code: string, days_ago: number, flight_no: string
-    ) => {
-      const hasTransmDate = status === 'transmitted' || status === 'acknowledged';
-      const r = await client.query(`
-        INSERT INTO mawbs (
-          mawb_no, mawb_date, origin, destination, flight_no, flight_origin_date,
-          total_packages, gross_weight, item_description,
-          customs_house_code, profile_id, created_by,
-          transmission_date, status, message_type
+    const upsertProfile = async (values: any[]) => {
+      const result = await client.query(`
+        INSERT INTO profiles (
+          profile_code, company_name, city, state, country,
+          phone, email, carn_number, customs_house_code, icegate_code,
+          pan_number, user_prefix, consol_agent_id, user_email,
+          address1, address2, gstin, billing_company, billing_state,
+          gst_rate, pan_for_invoice, sea_consol_lcl_rate, sea_consol_fcl_rate, location_code
         ) VALUES (
-          $1,
-          NOW() - ($2 * INTERVAL '1 day'),
-          $3, $4, $5,
-          NOW() - ($2 * INTERVAL '1 day'),
-          $6, $7, 'CONSOL',
-          $8, $9, $10,
-          ${hasTransmDate ? `NOW() - ($2 * INTERVAL '1 day') + INTERVAL '2 hours'` : 'NULL'},
-          $11, $12
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+          $11,$12,$13,$14,$15,$16,$17,$18,$19,
+          $20,$21,$22,$23,$24
         )
-        RETURNING id, mawb_no
-      `, [mawb_no, days_ago, origin, dest, flight_no, pkgs, wt, customs_code, profile_id, created_by, status, msg_type]);
-      return r.rows[0];
+        ON CONFLICT (profile_code) DO UPDATE SET
+          company_name = EXCLUDED.company_name,
+          customs_house_code = EXCLUDED.customs_house_code,
+          icegate_code = EXCLUDED.icegate_code,
+          user_email = EXCLUDED.user_email,
+          location_code = EXCLUDED.location_code
+        RETURNING id
+      `, values);
+      return result.rows[0].id as string;
     };
 
-    const m1  = await insertMawb('17625678901',    'PVG','DEL',45,512.500,'transmitted', delProfileId, uRobin.id,  'F','INDEL4',5, 'AI308');
-    const m2  = await insertMawb('17625678902',    'HKG','DEL',30,320.000,'draft',        delProfileId, uRobin.id,  'F','INDEL4',3, 'AI312');
-    const m3  = await insertMawb('17625678903',    'SIN','DEL',60,780.250,'transmitted', delProfileId, uAnkit.id,  'F','INDEL4',7, 'AI402');
-    const m4  = await insertMawb('17625678904',    'DXB','DEL',25,210.000,'acknowledged',delProfileId, uAnkit.id,  'F','INDEL4',10,'AI217');
-    const m5  = await insertMawb('17625679001',    'PEK','BOM',55,643.750,'transmitted', bomProfileId, uPriya.id,  'F','INBOM4',4, 'AI865');
-    const m6  = await insertMawb('17625679002',    'NRT','BOM',18,195.500,'draft',        bomProfileId, uPriya.id,  'F','INBOM4',2, 'AI872');
-    const m7  = await insertMawb('17625679003',    'ICN','BOM',40,458.000,'error',        bomProfileId, uPriya.id,  'F','INBOM4',6, 'AI143');
-    const m8  = await insertMawb('17625679101',    'SYD','BLR',22,276.000,'transmitted', blrProfileId, uSuresh.id, 'F','INBLR4',3, 'AI554');
-    const m9  = await insertMawb('17625679102',    'BKK','BLR',35,392.250,'draft',        blrProfileId, uSuresh.id, 'F','INBLR4',1, 'AI556');
-    const m10 = await insertMawb('17625678901-A1', 'PVG','DEL',46,515.000,'transmitted', delProfileId, uRobin.id,  'A','INDEL4',4, 'AI308');
+    const nhavaProfileId = await upsertProfile([
+      'SEA-INNSA1',
+      'Seven Seas Line India Pvt Ltd',
+      'Navi Mumbai',
+      'Maharashtra',
+      'India',
+      '022-66554411',
+      'ops.nhava@edisssea.in',
+      'AAACS7788MINSA1',
+      'INNSA1',
+      'SEANSA001',
+      'AAACS7788M',
+      'SEA',
+      'NSA-CONSOL-001',
+      'docs.nhava@edisssea.in',
+      'Office 21, Port Users Complex',
+      'Nhava Sheva, Navi Mumbai',
+      '27AAACS7788M1ZQ',
+      'Seven Seas Line India Pvt Ltd',
+      'Maharashtra',
+      18,
+      'AAACS7788M',
+      250,
+      400,
+      'INNSA1',
+    ]);
 
-    console.log('  → 10 MAWBs inserted');
+    const kolkataProfileId = await upsertProfile([
+      'SEA-INCCU1',
+      'Eastern Ocean Logistics',
+      'Kolkata',
+      'West Bengal',
+      'India',
+      '033-22334455',
+      'ops.kolkata@edisssea.in',
+      'AACCE9922KINCC1',
+      'INCCU1',
+      'SEACCU001',
+      'AACCE9922K',
+      'EOL',
+      'CCU-CONSOL-001',
+      'docs.kolkata@edisssea.in',
+      '3rd Floor, Strand Road',
+      'Kolkata Port Area',
+      '19AACCE9922K1Z8',
+      'Eastern Ocean Logistics',
+      'West Bengal',
+      18,
+      'AACCE9922K',
+      260,
+      410,
+      'INCCU1',
+    ]);
 
-    // ── 4. HAWBs ──────────────────────────────────────────────────────────────
-    console.log('Seeding HAWBs...');
+    const chennaiProfileId = await upsertProfile([
+      'SEA-INMAA1',
+      'Blue Reef Shipping',
+      'Chennai',
+      'Tamil Nadu',
+      'India',
+      '044-24556677',
+      'ops.chennai@edisssea.in',
+      'AACCB1122HINMA1',
+      'INMAA1',
+      'SEAMAA001',
+      'AACCB1122H',
+      'BRS',
+      'MAA-CONSOL-001',
+      'docs.chennai@edisssea.in',
+      'Harbour Estate',
+      'Chennai Port',
+      '33AACCB1122H1Z2',
+      'Blue Reef Shipping',
+      'Tamil Nadu',
+      18,
+      'AACCB1122H',
+      245,
+      390,
+      'INMAA1',
+    ]);
 
-    const insertHawb = async (
-      mawb_id: string, hawb_no: string, origin: string, dest: string,
-      pkgs: number, wt: number, desc: string, msg_type = 'F'
+    const adminHash = await bcrypt.hash('SeaAdmin@2026!', 10);
+    const userHash = await bcrypt.hash('user123', 10);
+
+    const upsertUser = async (
+      username: string,
+      passwordHash: string,
+      passwordPlain: string,
+      fullName: string,
+      email: string,
+      role: string,
+      profileId: string,
+      customsHouseCode: string
     ) => {
-      await client.query(`
-        INSERT INTO hawbs (mawb_id, hawb_no, origin, destination, total_packages, gross_weight, item_description, message_type, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft')
-      `, [mawb_id, hawb_no, origin, dest, pkgs, wt, desc, msg_type]);
+      const result = await client.query(`
+        INSERT INTO users (
+          username, password_hash, password_plain, full_name,
+          email, role, profile_id, customs_house_code, is_active
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE)
+        ON CONFLICT (username) DO UPDATE SET
+          password_hash = EXCLUDED.password_hash,
+          password_plain = EXCLUDED.password_plain,
+          full_name = EXCLUDED.full_name,
+          email = EXCLUDED.email,
+          role = EXCLUDED.role,
+          profile_id = EXCLUDED.profile_id,
+          customs_house_code = EXCLUDED.customs_house_code,
+          is_active = TRUE
+        RETURNING id
+      `, [username, passwordHash, passwordPlain, fullName, email, role, profileId, customsHouseCode]);
+      return result.rows[0].id as string;
     };
 
-    // HAWBs for MAWB 17625678901 (PVG→DEL, transmitted)
-    await insertHawb(m1.id, 'HAWK00100001', 'PVG', 'DEL', 10, 112.500, 'ELECTRONIC GOODS');
-    await insertHawb(m1.id, 'HAWK00100002', 'PVG', 'DEL', 15, 180.000, 'GARMENTS');
-    await insertHawb(m1.id, 'HAWK00100003', 'PVG', 'DEL',  8,  95.500, 'SPARE PARTS');
-    await insertHawb(m1.id, 'HAWK00100004', 'PVG', 'DEL', 12, 124.500, 'MACHINE PARTS');
+    const robinId = await upsertUser('robin', adminHash, 'SeaAdmin@2026!', 'Robin Kumar', 'robin@edisssea.in', 'admin', nhavaProfileId, 'INNSA1');
+    const priyaId = await upsertUser('priya', userHash, 'user123', 'Priya Sharma', 'priya@edisssea.in', 'user', kolkataProfileId, 'INCCU1');
+    const sureshId = await upsertUser('suresh', userHash, 'user123', 'Suresh Nair', 'suresh@edisssea.in', 'user', chennaiProfileId, 'INMAA1');
+    const ankitId = await upsertUser('ankit', userHash, 'user123', 'Ankit Verma', 'ankit@edisssea.in', 'user', nhavaProfileId, 'INNSA1');
+    await upsertUser('admin', adminHash, 'SeaAdmin@2026!', 'System Admin', 'admin@edisssea.in', 'master_admin', nhavaProfileId, 'INNSA1');
 
-    // HAWBs for MAWB 17625678903 (SIN→DEL, transmitted)
-    await insertHawb(m3.id, 'HAWK00300001', 'SIN', 'DEL', 20, 258.750, 'TEXTILES');
-    await insertHawb(m3.id, 'HAWK00300002', 'SIN', 'DEL', 18, 210.500, 'CHEMICALS NON-HAZ');
-    await insertHawb(m3.id, 'HAWK00300003', 'SIN', 'DEL', 22, 311.000, 'AUTOMOTIVE PARTS');
+    await client.query('UPDATE profiles SET user_id = $1 WHERE id = $2', [robinId, nhavaProfileId]);
+    await client.query('UPDATE profiles SET user_id = $1 WHERE id = $2', [priyaId, kolkataProfileId]);
+    await client.query('UPDATE profiles SET user_id = $1 WHERE id = $2', [sureshId, chennaiProfileId]);
 
-    // HAWBs for MAWB 17625678904 (DXB→DEL, acknowledged)
-    await insertHawb(m4.id, 'HAWK00400001', 'DXB', 'DEL', 10,  95.000, 'JEWELRY ITEMS');
-    await insertHawb(m4.id, 'HAWK00400002', 'DXB', 'DEL', 15, 115.000, 'LEATHER GOODS');
+    await client.query('DELETE FROM user_locations');
+    await client.query(`
+      INSERT INTO user_locations (user_id, location_id)
+      SELECT $1, id FROM locations WHERE customs_house_code IN ('INNSA1', 'INPAV1', 'INMUN1')
+      ON CONFLICT DO NOTHING
+    `, [robinId]);
+    await client.query(`
+      INSERT INTO user_locations (user_id, location_id)
+      SELECT $1, id FROM locations WHERE customs_house_code = 'INCCU1'
+      ON CONFLICT DO NOTHING
+    `, [priyaId]);
+    await client.query(`
+      INSERT INTO user_locations (user_id, location_id)
+      SELECT $1, id FROM locations WHERE customs_house_code = 'INMAA1'
+      ON CONFLICT DO NOTHING
+    `, [sureshId]);
+    await client.query(`
+      INSERT INTO user_locations (user_id, location_id)
+      SELECT $1, id FROM locations WHERE customs_house_code = 'INNSA1'
+      ON CONFLICT DO NOTHING
+    `, [ankitId]);
 
-    // HAWBs for MAWB 17625679001 (PEK→BOM, transmitted)
-    await insertHawb(m5.id, 'HAWK00501', 'PEK', 'BOM', 18, 210.250, 'PHARMACEUTICAL');
-    await insertHawb(m5.id, 'HAWK00502', 'PEK', 'BOM', 22, 265.500, 'MEDICAL EQUIPMENT');
-    await insertHawb(m5.id, 'HAWK00503', 'PEK', 'BOM', 15, 168.000, 'LABORATORY SUPPLIES');
+    const sampleMbl = await client.query(`
+      INSERT INTO sea_mbls (
+        mbl_no, mbl_date, cargo_move, port_of_delivery, dest_cfs, subline_no,
+        vessel_voyage_no, port_of_loading, port_of_unloading, cargo_nature, item_type,
+        importer_name, importer_address1, importer_address2, importer_address3,
+        description, marks_numbers, transport, bond_no,
+        carrier_name, carrier_code, mlo_name, mlo_code,
+        total_packages, total_gross_weight, total_volume_cbm,
+        customs_house_code, profile_id, created_by, status
+      ) VALUES (
+        'SHACB26012109', CURRENT_DATE - INTERVAL '10 days',
+        'LC-LOCAL Cargo', 'INCCU1 (Kolkata Sea)', 'INCCU1CIL2', '1',
+        'VNCMT - CALMEP / 001', 'VN CMT - CAL MEP', 'INNSA1 - Nhava Sheva',
+        'C-Containerized', 'OT-Other Cargo',
+        'CENTURY PLYBOARDS (INDIA) LTD.',
+        'DIAMOND HARBOUR ROAD KANCHOWKI',
+        'BISHNUPUR 24 PARGANAS(S)',
+        'INDIA PIN-743503',
+        '1 PALLET STC PRINTED BASE PAPER',
+        'AS PER HBL',
+        'R',
+        '2002381469',
+        'CENTURY UP NEW CFS',
+        'CENT-UP',
+        'RCL CORRECT',
+        'AABCC9725G',
+        3,
+        1560.8,
+        12.75,
+        'INNSA1',
+        $1,
+        $2,
+        'draft'
+      )
+      ON CONFLICT (mbl_no) DO UPDATE SET
+        total_packages = EXCLUDED.total_packages,
+        total_gross_weight = EXCLUDED.total_gross_weight,
+        total_volume_cbm = EXCLUDED.total_volume_cbm,
+        updated_at = NOW()
+      RETURNING id
+    `, [nhavaProfileId, robinId]);
 
-    // HAWBs for MAWB 17625679101 (SYD→BLR, transmitted)
-    await insertHawb(m8.id, 'HAWK00701', 'SYD', 'BLR', 12, 148.000, 'COMPUTER HARDWARE');
-    await insertHawb(m8.id, 'HAWK00702', 'SYD', 'BLR', 10, 128.000, 'NETWORKING EQUIPMENT');
+    const sampleMblId = sampleMbl.rows[0].id as string;
 
-    // HAWBs for MAWB 17625678901-A1 (amendment)
-    await insertHawb(m10.id, 'HAWK00100001', 'PVG', 'DEL', 10, 112.500, 'ELECTRONIC GOODS', 'A');
-    await insertHawb(m10.id, 'HAWK00100002', 'PVG', 'DEL', 15, 180.000, 'GARMENTS',         'A');
-    await insertHawb(m10.id, 'HAWK00100003', 'PVG', 'DEL',  9,  98.000, 'SPARE PARTS',      'A');
-    await insertHawb(m10.id, 'HAWK00100004', 'PVG', 'DEL', 12, 124.500, 'MACHINE PARTS',    'A');
-
-    console.log('  → 18 HAWBs inserted');
+    await client.query('DELETE FROM sea_hbls WHERE mbl_id = $1', [sampleMblId]);
+    await client.query(`
+      INSERT INTO sea_hbls (
+        mbl_id, hbl_no, hbl_date, container_no, seal_no, container_size,
+        container_type, soc_flag, agent_code, package_count, gross_weight,
+        cargo_net_weight, volume_cbm, package_type, cargo_description,
+        marks_numbers, hs_code, imo_code, item_type, invoice_value_currency,
+        sort_order, created_by
+      ) VALUES
+        ($1, 'KYCLTH2600021', CURRENT_DATE - INTERVAL '11 days', 'TXGU8259716', 'SHA2608007', '40OO',
+         'LCL', 'No', 'AG001', 1, 929, 900, 4.25, 'PLT (PALLET)',
+         'PRINTED BASE PAPER', 'AS PER HBL', '4810', '', 'OT-Other Cargo', 'INR', 1, $2),
+        ($1, 'KYCLTH2600022', CURRENT_DATE - INTERVAL '10 days', 'TXGU8259717', 'SHA2608008', '40OO',
+         'LCL', 'No', 'AG001', 1, 315, 300, 1.80, 'PLT (PALLET)',
+         'LAMINATED BOARD', 'AS PER HBL', '4412', '', 'OT-Other Cargo', 'INR', 2, $2),
+        ($1, 'KYCLTH2600023', CURRENT_DATE - INTERVAL '10 days', 'TXGU8259718', 'SHA2608009', '20GP',
+         'LCL', 'No', 'AG001', 1, 316.8, 305, 1.95, 'PLT (PALLET)',
+         'WOODEN PANELS', 'AS PER HBL', '4411', '', 'OT-Other Cargo', 'INR', 3, $2)
+    `, [sampleMblId, robinId]);
 
     await client.query('COMMIT');
 
-    console.log('\n✅ Seeding complete!\n');
-    console.log('─────────────────────────────────────────────────');
-    console.log('  Login credentials:');
-    console.log('  admin  / admin123  → master_admin (Delhi)');
-    console.log('  robin  / admin123  → admin        (Delhi)');
-    console.log('  priya  / user123   → user         (Mumbai)');
-    console.log('  suresh / user123   → user         (Bangalore)');
-    console.log('  ankit  / user123   → user         (Delhi)');
-    console.log('─────────────────────────────────────────────────');
-
-  } catch (err) {
+    console.log('Sea seed complete');
+    console.log('admin  / SeaAdmin@2026!');
+    console.log('robin  / SeaAdmin@2026!');
+    console.log('priya  / user123');
+    console.log('suresh / user123');
+    console.log('ankit  / user123');
+  } catch (error) {
     await client.query('ROLLBACK');
-    console.error('❌ Seeding failed, rolled back:', err);
-    throw err;
+    console.error('Sea seed failed', error);
+    throw error;
   } finally {
     client.release();
     await pool.end();
