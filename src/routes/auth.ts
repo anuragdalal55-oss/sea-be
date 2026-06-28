@@ -19,8 +19,8 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       `SELECT u.*, p.profile_code, p.company_name,
               COALESCE(u.customs_house_code, p.customs_house_code) as customs_house_code,
               p.carn_number
-       FROM users u
-       LEFT JOIN profiles p ON u.profile_id = p.id
+       FROM sea_users u
+       LEFT JOIN sea_profiles p ON u.profile_id = p.id
        WHERE u.username = $1 AND u.is_active = TRUE`,
       [username]
     );
@@ -68,7 +68,7 @@ router.get('/me', authenticate, async (req: AuthRequest, res: Response): Promise
     const result = await pool.query(
       `SELECT u.id, u.username, u.full_name, u.email, u.role,
               p.profile_code, p.company_name, p.customs_house_code, p.carn_number
-       FROM users u LEFT JOIN profiles p ON u.profile_id = p.id
+       FROM sea_users u LEFT JOIN sea_profiles p ON u.profile_id = p.id
        WHERE u.id = $1`,
       [req.user?.id]
     );
@@ -87,7 +87,7 @@ router.get('/me', authenticate, async (req: AuthRequest, res: Response): Promise
 router.post('/change-password', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
   const { current_password, new_password } = req.body;
   try {
-    const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.user?.id]);
+    const result = await pool.query('SELECT * FROM sea_users WHERE id = $1', [req.user?.id]);
     const user = result.rows[0];
     const valid = await bcrypt.compare(current_password, user.password_hash);
     if (!valid) {
@@ -96,7 +96,7 @@ router.post('/change-password', authenticate, async (req: AuthRequest, res: Resp
       return;
     }
     const hash = await bcrypt.hash(new_password, 10);
-    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user?.id]);
+    await pool.query('UPDATE sea_users SET password_hash = $1 WHERE id = $2', [hash, req.user?.id]);
     logger.info('AUTH', `Password changed for user: ${req.user?.username}`);
     res.json({ message: 'Password changed successfully' });
   } catch (err) {

@@ -15,7 +15,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     if (isAdmin) {
       // Admins see all active Indian locations only
       const result = await pool.query(
-        `SELECT * FROM locations WHERE is_active=TRUE AND country = 'India' ORDER BY iata_code`
+        `SELECT * FROM sea_locations WHERE is_active=TRUE AND country = 'India' ORDER BY iata_code`
       );
       res.json(result.rows);
       return;
@@ -23,8 +23,8 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
 
     // Check if user has specific location assignments
     const assignResult = await pool.query(
-      `SELECT ul.location_id FROM user_locations ul
-       JOIN locations l ON l.id = ul.location_id
+      `SELECT ul.location_id FROM sea_user_locations ul
+       JOIN sea_locations l ON l.id = ul.location_id
        WHERE ul.user_id = $1 AND l.country = $2
        ORDER BY l.iata_code`,
       [req.user?.id, 'India']
@@ -33,7 +33,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     if (assignResult.rows.length === 0) {
       // No restrictions assigned — show all Indian locations
       const result = await pool.query(
-        `SELECT * FROM locations WHERE is_active=TRUE AND country = 'India' ORDER BY iata_code`
+        `SELECT * FROM sea_locations WHERE is_active=TRUE AND country = 'India' ORDER BY iata_code`
       );
       res.json(result.rows);
     } else {
@@ -41,7 +41,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
       const locationIds = assignResult.rows.map(r => r.location_id);
       const placeholders = locationIds.map((_: any, i: number) => `$${i + 1}`).join(',');
       const result = await pool.query(
-        `SELECT * FROM locations WHERE id IN (${placeholders}) AND is_active=TRUE AND country = 'India' ORDER BY iata_code`,
+        `SELECT * FROM sea_locations WHERE id IN (${placeholders}) AND is_active=TRUE AND country = 'India' ORDER BY iata_code`,
         locationIds
       );
       res.json(result.rows);
@@ -55,8 +55,8 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
 router.get('/user/:userId', requireRole(['master_admin', 'admin']), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await pool.query(
-      `SELECT l.* FROM locations l
-       JOIN user_locations ul ON l.id = ul.location_id
+      `SELECT l.* FROM sea_locations l
+       JOIN sea_user_locations ul ON l.id = ul.location_id
        WHERE ul.user_id = $1 AND l.is_active = TRUE
        ORDER BY l.iata_code`,
       [req.params.userId]
@@ -79,11 +79,11 @@ router.put('/user/:userId', requireRole(['master_admin', 'admin']), async (req: 
   try {
     await client.query('BEGIN');
     // Remove all current assignments
-    await client.query('DELETE FROM user_locations WHERE user_id = $1', [req.params.userId]);
+    await client.query('DELETE FROM sea_user_locations WHERE user_id = $1', [req.params.userId]);
     // Insert new assignments
     for (const locId of locationIds) {
       await client.query(
-        'INSERT INTO user_locations (user_id, location_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        'INSERT INTO sea_user_locations (user_id, location_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [req.params.userId, locId]
       );
     }
@@ -108,7 +108,7 @@ router.post('/', requireRole(['master_admin', 'admin']), async (req: AuthRequest
     const code = String(iata_code).trim().toUpperCase();
     const chc = String(customs_house_code || '').trim().toUpperCase() || code;
     const result = await pool.query(
-      'INSERT INTO locations (iata_code, city_name, country, customs_house_code) VALUES ($1, $2, $3, $4) RETURNING *',
+      'INSERT INTO sea_locations (iata_code, city_name, country, customs_house_code) VALUES ($1, $2, $3, $4) RETURNING *',
       [code, city_name, country || 'India', chc]
     );
     res.status(201).json(result.rows[0]);
@@ -120,7 +120,7 @@ router.post('/', requireRole(['master_admin', 'admin']), async (req: AuthRequest
 
 router.delete('/:id', requireRole(['master_admin']), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    await pool.query('UPDATE locations SET is_active=FALSE WHERE id=$1', [req.params.id]);
+    await pool.query('UPDATE sea_locations SET is_active=FALSE WHERE id=$1', [req.params.id]);
     res.json({ message: 'Removed' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });

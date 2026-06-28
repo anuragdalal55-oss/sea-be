@@ -22,17 +22,28 @@ const cleanNumber = (value: any): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-type PreparedHblRow = {
-  rowNo: number;
-  hbl_no: string;
-  hbl_date: string | null;
-  // container
+type ContainerItem = {
   container_no: string | null;
   seal_no: string | null;
   container_size: string | null;
   container_type: string | null;
   soc_flag: string | null;
   agent_code: string | null;
+};
+
+type PreparedHblRow = {
+  rowNo: number;
+  hbl_no: string;
+  hbl_date: string | null;
+  // first container (backward compat flat fields)
+  container_no: string | null;
+  seal_no: string | null;
+  container_size: string | null;
+  container_type: string | null;
+  soc_flag: string | null;
+  agent_code: string | null;
+  // all containers as JSON array
+  containers_json: ContainerItem[];
   // measures
   package_count: number;
   gross_weight: number;
@@ -72,18 +83,40 @@ function prepareHblRows(rows: any[], fallbackItemType: string | null): PreparedH
     const grossWeight = cleanNumber(row?.gross_weight) ?? 0;
     const volumeCbm = cleanNumber(row?.volume_cbm) ?? 0;
     const cargoDescription = cleanText(row?.cargo_description);
-    const containerNo = cleanText(row?.container_no);
+
+    // Build containers array: prefer new format, fall back to flat fields
+    const rawContainers: ContainerItem[] = Array.isArray(row?.containers) && row.containers.length > 0
+      ? row.containers.map((c: any) => ({
+          container_no: cleanText(c?.container_no),
+          seal_no: cleanText(c?.seal_no),
+          container_size: cleanText(c?.container_size),
+          container_type: cleanText(c?.container_type),
+          soc_flag: cleanText(c?.soc_flag),
+          agent_code: cleanText(c?.agent_code),
+        }))
+      : [{
+          container_no: cleanText(row?.container_no),
+          seal_no: cleanText(row?.seal_no),
+          container_size: cleanText(row?.container_size),
+          container_type: cleanText(row?.container_type),
+          soc_flag: cleanText(row?.soc_flag),
+          agent_code: cleanText(row?.agent_code),
+        }];
+    const validContainers = rawContainers.filter(c => c.container_no);
+    const firstContainer = validContainers[0] ?? rawContainers[0];
+    const containerNo = firstContainer.container_no;
 
     return {
       rowNo: index + 1,
       hbl_no: hblNo,
       hbl_date: cleanDate(row?.hbl_date),
       container_no: containerNo,
-      seal_no: cleanText(row?.seal_no),
-      container_size: cleanText(row?.container_size),
-      container_type: cleanText(row?.container_type),
-      soc_flag: cleanText(row?.soc_flag),
-      agent_code: cleanText(row?.agent_code),
+      seal_no: firstContainer.seal_no,
+      container_size: firstContainer.container_size,
+      container_type: firstContainer.container_type,
+      soc_flag: firstContainer.soc_flag,
+      agent_code: firstContainer.agent_code,
+      containers_json: rawContainers,
       package_count: packageCount,
       gross_weight: grossWeight,
       cargo_net_weight: cleanNumber(row?.cargo_net_weight) ?? 0,
@@ -121,7 +154,7 @@ async function loadMblWithHbls(id: string) {
     `SELECT m.*, p.profile_code, p.company_name,
             COALESCE(h.hbl_count, 0) AS hbl_count
      FROM sea_mbls m
-     LEFT JOIN profiles p ON m.profile_id = p.id
+     LEFT JOIN sea_profiles p ON m.profile_id = p.id
      LEFT JOIN (
        SELECT mbl_id, COUNT(*)::int AS hbl_count
        FROM sea_hbls
@@ -184,13 +217,18 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
 
     const result = await pool.query(
       `SELECT m.*, p.profile_code, p.company_name,
-              COALESCE(h.hbl_count, 0) AS hbl_count
+              COALESCE(h.hbl_count, 0) AS hbl_count,
+              COALESCE(t.tx_count, 0) AS tx_count
        FROM sea_mbls m
-       LEFT JOIN profiles p ON m.profile_id = p.id
+       LEFT JOIN sea_profiles p ON m.profile_id = p.id
        LEFT JOIN (
          SELECT mbl_id, COUNT(*)::int AS hbl_count
          FROM sea_hbls GROUP BY mbl_id
        ) h ON h.mbl_id = m.id
+       LEFT JOIN (
+         SELECT sea_mbl_id, COUNT(*)::int AS tx_count
+         FROM sea_transmissions GROUP BY sea_mbl_id
+       ) t ON t.sea_mbl_id = m.id
        ${whereClause}
        ORDER BY m.updated_at DESC, m.created_at DESC
        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
@@ -385,10 +423,10 @@ async function saveMbl(req: AuthRequest, res: Response, mode: 'create' | 'update
           cargo_move, port_of_delivery, dest_cfs, subline_no,
           cargo_nature, importer_name, importer_address1, importer_address2, importer_address3,
           carrier_name, carrier_code, bond_no, transport, mlo_name, mlo_code,
-          sort_order, created_by
+          sort_order, created_by, containers_json
         ) VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-          $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37
+          $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38
         )`,
         [
           mblId, row.hbl_no, row.hbl_date,
@@ -399,7 +437,7 @@ async function saveMbl(req: AuthRequest, res: Response, mode: 'create' | 'update
           row.cargo_move, row.port_of_delivery, row.dest_cfs, row.subline_no,
           row.cargo_nature, row.importer_name, row.importer_address1, row.importer_address2, row.importer_address3,
           row.carrier_name, row.carrier_code, row.bond_no, row.transport, row.mlo_name, row.mlo_code,
-          i + 1, req.user?.id,
+          i + 1, req.user?.id, JSON.stringify(row.containers_json),
         ]
       );
     }

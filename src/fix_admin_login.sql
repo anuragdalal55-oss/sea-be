@@ -5,7 +5,7 @@
 -- Username: admin
 -- Password: SeaAdmin@2026!
 
-INSERT INTO users (
+INSERT INTO sea_users (
   username,
   password_hash,
   password_plain,
@@ -26,7 +26,7 @@ SELECT
   p.id,
   'INNSA1',
   TRUE
-FROM profiles p
+FROM sea_profiles p
 WHERE p.profile_code = 'SEAADMIN-INNSA1'
 ON CONFLICT (username) DO UPDATE SET
   password_hash = EXCLUDED.password_hash,

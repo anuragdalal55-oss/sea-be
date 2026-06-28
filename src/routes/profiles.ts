@@ -24,7 +24,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
     const countResult = await pool.query(
-      `SELECT COUNT(*) FROM profiles p ${where}`, params
+      `SELECT COUNT(*) FROM sea_profiles p ${where}`, params
     );
     const total = parseInt(countResult.rows[0].count);
 
@@ -34,8 +34,8 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     const result = await pool.query(`
       SELECT p.*, p.user_id,
              u2.username as user_username, u2.full_name as user_full_name
-      FROM profiles p
-      LEFT JOIN users u2 ON u2.id = p.user_id
+      FROM sea_profiles p
+      LEFT JOIN sea_users u2 ON u2.id = p.user_id
       ${where}
       ORDER BY p.company_name
       LIMIT $${limitIdx} OFFSET $${offsetIdx}
@@ -52,7 +52,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
 router.get('/control-numbers', requireRole(['master_admin', 'admin']), async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await pool.query(
-      'SELECT user_id, location_code, control_number FROM file_control_numbers WHERE user_id IS NOT NULL'
+      'SELECT user_id, location_code, control_number FROM sea_file_control_numbers WHERE user_id IS NOT NULL'
     );
     res.json(result.rows);
   } catch (err) {
@@ -63,7 +63,7 @@ router.get('/control-numbers', requireRole(['master_admin', 'admin']), async (_r
 
 router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const result = await pool.query('SELECT * FROM profiles WHERE id = $1', [req.params.id]);
+    const result = await pool.query('SELECT * FROM sea_profiles WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) { res.status(404).json({ message: 'Profile not found' }); return; }
     res.json(result.rows[0]);
   } catch (err) {
@@ -85,7 +85,7 @@ async function upsertProfile(fields: any): Promise<{ created: boolean; row: any 
   const profileCode = `${(user_prefix || '').toUpperCase()}${(location_code || '').toUpperCase()}`;
 
   const result = await pool.query(
-    `INSERT INTO profiles (
+    `INSERT INTO sea_profiles (
       profile_code, company_name, user_id,
       customs_house_code, icegate_code,
       pan_number, user_prefix, consol_agent_id, user_email,
@@ -111,7 +111,7 @@ async function upsertProfile(fields: any): Promise<{ created: boolean; row: any 
   if (result.rows.length > 0) return { created: true, row: result.rows[0] };
   // Already exists — fetch it
   const existing = await pool.query(
-    'SELECT * FROM profiles WHERE user_id = $1 AND location_code = $2',
+    'SELECT * FROM sea_profiles WHERE user_id = $1 AND location_code = $2',
     [user_id, location_code]
   );
   return { created: false, row: existing.rows[0] };
@@ -152,7 +152,7 @@ router.post('/', requireRole(['master_admin', 'admin']), async (req: AuthRequest
   try {
     const { row } = await upsertProfile(req.body);
     if (user_id) {
-      await pool.query('UPDATE users SET profile_id = $1 WHERE id = $2', [row.id, user_id]);
+      await pool.query('UPDATE sea_users SET profile_id = $1 WHERE id = $2', [row.id, user_id]);
     }
     res.status(201).json(row);
   } catch (err: any) {
@@ -173,7 +173,7 @@ router.put('/:id', requireRole(['master_admin', 'admin']), async (req: AuthReque
   } = req.body;
   try {
     const result = await pool.query(
-      `UPDATE profiles SET
+      `UPDATE sea_profiles SET
         company_name=$1, address=$2, city=$3, state=$4, country=$5, phone=$6, email=$7,
         carn_number=$8, customs_house_code=$9, icegate_code=$10,
         pan_number=$11, user_prefix=$12, consol_agent_id=$13, user_email=$14, agent_name=$15,
@@ -194,7 +194,7 @@ router.put('/:id', requireRole(['master_admin', 'admin']), async (req: AuthReque
     );
 
     if (user_id) {
-      await pool.query('UPDATE users SET profile_id = $1 WHERE id = $2', [req.params.id, user_id]);
+      await pool.query('UPDATE sea_users SET profile_id = $1 WHERE id = $2', [req.params.id, user_id]);
     }
 
     res.json(result.rows[0]);
@@ -206,7 +206,7 @@ router.put('/:id', requireRole(['master_admin', 'admin']), async (req: AuthReque
 
 router.delete('/:id', requireRole(['master_admin', 'admin']), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    await pool.query('DELETE FROM profiles WHERE id = $1', [req.params.id]);
+    await pool.query('DELETE FROM sea_profiles WHERE id = $1', [req.params.id]);
     res.json({ message: 'Profile deleted' });
   } catch (err) {
     logger.error('PROFILES', 'Route error', err);

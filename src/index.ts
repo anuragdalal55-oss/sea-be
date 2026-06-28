@@ -13,6 +13,8 @@ import seaHblRoutes from './routes/seaHbls';
 import seaMblRoutes from './routes/seaMbls';
 import seaMloRoutes from './routes/seaMlos';
 import seaTransmissionRoutes from './routes/seaTransmissions';
+import seaImporterRoutes from './routes/seaImporters';
+import seaPendingRoutes from './routes/seaPendingStatement';
 import userRoutes from './routes/users';
 import { applyAppEnv } from './utils/env';
 import { logger, sanitizeBody } from './utils/logger';
@@ -80,6 +82,8 @@ app.use('/api/sea-hbls', seaHblRoutes);
 app.use('/api/sea-transmissions', seaTransmissionRoutes);
 app.use('/api/sea-carriers', seaCarrierRoutes);
 app.use('/api/sea-mlos', seaMloRoutes);
+app.use('/api/sea-importers', seaImporterRoutes);
+app.use('/api/sea-pending', seaPendingRoutes);
 
 app.use((req: express.Request, res: express.Response) => {
   logger.warn('HTTP', `404 Not Found: ${req.method} ${req.originalUrl}`);

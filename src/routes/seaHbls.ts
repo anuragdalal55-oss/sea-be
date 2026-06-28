@@ -99,7 +99,8 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
 
     const {
       hbl_no, hbl_date,
-      container_no, seal_no, container_size, container_type, soc_flag, agent_code,
+      containers, // new multi-container array
+      container_no, seal_no, container_size, container_type, soc_flag, agent_code, // legacy fallback
       package_count, gross_weight, cargo_net_weight, volume_cbm,
       package_type, cargo_description, marks_numbers, hs_code, imo_code,
       item_type, invoice_value_currency,
@@ -115,6 +116,16 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     const dup = await pool.query('SELECT id FROM sea_hbls WHERE UPPER(hbl_no) = $1 AND id <> $2', [newHblNo, req.params.id]);
     if (dup.rows.length > 0) { res.status(400).json({ message: `HBL "${newHblNo}" already exists` }); return; }
 
+    // Resolve first container for flat fields (backward compat)
+    const firstCt = Array.isArray(containers) && containers.length > 0 ? containers[0] : null;
+    const resolvedContainerNo = cleanText(firstCt?.container_no ?? container_no);
+    const resolvedSealNo = cleanText(firstCt?.seal_no ?? seal_no);
+    const resolvedContainerSize = cleanText(firstCt?.container_size ?? container_size);
+    const resolvedContainerType = cleanText(firstCt?.container_type ?? container_type);
+    const resolvedSocFlag = cleanText(firstCt?.soc_flag ?? soc_flag);
+    const resolvedAgentCode = cleanText(firstCt?.agent_code ?? agent_code);
+    const containersJson = Array.isArray(containers) ? JSON.stringify(containers) : null;
+
     const result = await pool.query(
       `UPDATE sea_hbls SET
         hbl_no=$1, hbl_date=$2,
@@ -125,13 +136,13 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
         cargo_move=$20, port_of_delivery=$21, dest_cfs=$22, subline_no=$23,
         cargo_nature=$24, importer_name=$25, importer_address1=$26, importer_address2=$27, importer_address3=$28,
         carrier_name=$29, carrier_code=$30, bond_no=$31, transport=$32, mlo_name=$33, mlo_code=$34,
-        updated_at=NOW()
-       WHERE id=$35
+        containers_json=$35, updated_at=NOW()
+       WHERE id=$36
        RETURNING *`,
       [
         newHblNo, cleanText(hbl_date),
-        cleanText(container_no), cleanText(seal_no), cleanText(container_size), cleanText(container_type),
-        cleanText(soc_flag), cleanText(agent_code),
+        resolvedContainerNo, resolvedSealNo, resolvedContainerSize, resolvedContainerType,
+        resolvedSocFlag, resolvedAgentCode,
         cleanNumber(package_count) ?? 0, cleanNumber(gross_weight) ?? 0,
         cleanNumber(cargo_net_weight) ?? 0, cleanNumber(volume_cbm) ?? 0,
         cleanText(package_type), cleanText(cargo_description), cleanText(marks_numbers),
@@ -141,6 +152,7 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
         cleanText(importer_address1), cleanText(importer_address2), cleanText(importer_address3),
         cleanText(carrier_name), cleanText(carrier_code), cleanText(bond_no), cleanText(transport),
         cleanText(mlo_name), cleanText(mlo_code),
+        containersJson,
         req.params.id,
       ]
     );

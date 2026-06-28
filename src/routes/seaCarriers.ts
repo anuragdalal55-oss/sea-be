@@ -55,8 +55,8 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
   const name = cleanText(carrier_name);
   const code = cleanText(carrier_code);
 
-  if (!name || !code) {
-    res.status(400).json({ message: 'Carrier name and code are required' });
+  if (!name) {
+    res.status(400).json({ message: 'Carrier name is required' });
     return;
   }
 
@@ -90,8 +90,8 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   const name = cleanText(carrier_name);
   const code = cleanText(carrier_code);
 
-  if (!name || !code) {
-    res.status(400).json({ message: 'Carrier name and code are required' });
+  if (!name) {
+    res.status(400).json({ message: 'Carrier name is required' });
     return;
   }
 

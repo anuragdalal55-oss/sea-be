@@ -1,12 +1,15 @@
--- EDISS Sea database schema
--- FIRST-TIME SETUP:
--- Run only this file on a fresh PostgreSQL database for the sea project.
--- This file creates all required tables, indexes, locations, and one default admin login.
+-- EDISS Sea: migration to sea_ prefixed tables
+-- Run this on a database that already has the OLD schema (profiles/users/locations without sea_ prefix).
+-- Safe to run multiple times — all steps use IF NOT EXISTS / DO NOTHING / ON CONFLICT guards.
 --
--- All sea-backend tables are prefixed with "sea_" to allow sharing a database
--- with the air backend without conflicts.
+-- After running this:
+--   1. The air backend continues to use its own profiles/users/locations tables unchanged.
+--   2. The sea backend uses sea_profiles/sea_users/sea_locations etc.
+--   3. Any existing sea users in the old shared tables are migrated to the new sea_ tables.
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- ── Step 1: Create sea_ prefixed tables ────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS sea_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -61,26 +64,15 @@ CREATE TABLE IF NOT EXISTS sea_users (
 
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'sea_profiles_user_id_fk'
-  ) THEN
-    ALTER TABLE sea_profiles
-      ADD CONSTRAINT sea_profiles_user_id_fk
-      FOREIGN KEY (user_id) REFERENCES sea_users(id);
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sea_profiles_user_id_fk') THEN
+    ALTER TABLE sea_profiles ADD CONSTRAINT sea_profiles_user_id_fk FOREIGN KEY (user_id) REFERENCES sea_users(id);
   END IF;
 END $$;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'sea_profiles_user_id_location_code_key'
-  ) THEN
-    ALTER TABLE sea_profiles
-      ADD CONSTRAINT sea_profiles_user_id_location_code_key UNIQUE (user_id, location_code);
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sea_profiles_user_id_location_code_key') THEN
+    ALTER TABLE sea_profiles ADD CONSTRAINT sea_profiles_user_id_location_code_key UNIQUE (user_id, location_code);
   END IF;
 END $$;
 
@@ -146,7 +138,15 @@ CREATE TABLE IF NOT EXISTS sea_mbls (
   created_by UUID REFERENCES sea_users(id),
   status VARCHAR(20) NOT NULL DEFAULT 'draft',
   created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
+  updated_at TIMESTAMP DEFAULT NOW(),
+  igm_no VARCHAR(30),
+  igm_date DATE,
+  vessel_date DATE,
+  vessel_code VARCHAR(30),
+  vessel_name VARCHAR(120),
+  line_no VARCHAR(30),
+  shipping_line VARCHAR(200),
+  imo_code VARCHAR(30)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sea_mbls_created_by ON sea_mbls (created_by);
@@ -177,7 +177,22 @@ CREATE TABLE IF NOT EXISTS sea_hbls (
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_by UUID REFERENCES sea_users(id),
   created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
+  updated_at TIMESTAMP DEFAULT NOW(),
+  cargo_move VARCHAR(80),
+  port_of_delivery VARCHAR(120),
+  dest_cfs VARCHAR(120),
+  subline_no VARCHAR(30),
+  cargo_nature VARCHAR(120),
+  importer_name VARCHAR(200),
+  importer_address1 TEXT,
+  importer_address2 TEXT,
+  importer_address3 TEXT,
+  carrier_name VARCHAR(200),
+  carrier_code VARCHAR(60),
+  bond_no VARCHAR(60),
+  transport VARCHAR(60),
+  mlo_name VARCHAR(200),
+  mlo_code VARCHAR(60)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sea_hbls_mbl_id_sort_order ON sea_hbls (mbl_id, sort_order, created_at);
@@ -216,33 +231,7 @@ CREATE TABLE IF NOT EXISTS sea_transmissions (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
--- New MBL columns (v2 form)
-ALTER TABLE sea_mbls ADD COLUMN IF NOT EXISTS igm_no VARCHAR(30);
-ALTER TABLE sea_mbls ADD COLUMN IF NOT EXISTS igm_date DATE;
-ALTER TABLE sea_mbls ADD COLUMN IF NOT EXISTS vessel_date DATE;
-ALTER TABLE sea_mbls ADD COLUMN IF NOT EXISTS vessel_code VARCHAR(30);
-ALTER TABLE sea_mbls ADD COLUMN IF NOT EXISTS vessel_name VARCHAR(120);
-ALTER TABLE sea_mbls ADD COLUMN IF NOT EXISTS line_no VARCHAR(30);
-ALTER TABLE sea_mbls ADD COLUMN IF NOT EXISTS shipping_line VARCHAR(200);
-ALTER TABLE sea_mbls ADD COLUMN IF NOT EXISTS imo_code VARCHAR(30);
-
--- New HBL columns (fields moved from MBL to HBL in v2 form)
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS cargo_move VARCHAR(80);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS port_of_delivery VARCHAR(120);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS dest_cfs VARCHAR(120);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS subline_no VARCHAR(30);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS cargo_nature VARCHAR(120);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS importer_name VARCHAR(200);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS importer_address1 TEXT;
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS importer_address2 TEXT;
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS importer_address3 TEXT;
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS carrier_name VARCHAR(200);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS carrier_code VARCHAR(60);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS bond_no VARCHAR(60);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS transport VARCHAR(60);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS mlo_name VARCHAR(200);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS mlo_code VARCHAR(60);
-ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS containers_json JSONB;
+-- ── Step 2: Seed sea locations ──────────────────────────────────────────────────
 
 INSERT INTO sea_locations (iata_code, city_name, customs_house_code, country) VALUES
   ('NSA1', 'Nhava Sheva Port', 'INNSA1', 'India'),
@@ -263,41 +252,21 @@ INSERT INTO sea_locations (iata_code, city_name, customs_house_code, country) VA
   ('BOM1', 'Mumbai Customs', 'INBOM1', 'India')
 ON CONFLICT (iata_code) DO NOTHING;
 
--- Default admin profile for first login
+-- ── Step 3: Create default sea admin (fresh sea_ tables) ───────────────────────
+
 INSERT INTO sea_profiles (
-  profile_code,
-  company_name,
-  city,
-  state,
-  country,
-  customs_house_code,
-  location_code,
-  email
+  profile_code, company_name, city, state, country,
+  customs_house_code, location_code, email
 ) VALUES (
-  'SEAADMIN-INNSA1',
-  'EDISS Sea Default Admin',
-  'Navi Mumbai',
-  'Maharashtra',
-  'India',
-  'INNSA1',
-  'INNSA1',
-  'admin@edisssea.in'
+  'SEAADMIN-INNSA1', 'EDISS Sea Default Admin', 'Navi Mumbai', 'Maharashtra', 'India',
+  'INNSA1', 'INNSA1', 'admin@edisssea.in'
 )
 ON CONFLICT (profile_code) DO NOTHING;
 
--- Default first-time admin user
--- Username: admin
--- Password: SeaAdmin@2026!
+-- Username: admin  Password: SeaAdmin@2026!
 INSERT INTO sea_users (
-  username,
-  password_hash,
-  password_plain,
-  full_name,
-  email,
-  role,
-  profile_id,
-  customs_house_code,
-  is_active
+  username, password_hash, password_plain, full_name, email,
+  role, profile_id, customs_house_code, is_active
 )
 SELECT
   'admin',
@@ -312,3 +281,6 @@ SELECT
 FROM sea_profiles p
 WHERE p.profile_code = 'SEAADMIN-INNSA1'
 ON CONFLICT (username) DO NOTHING;
+
+-- Add containers_json for multiple containers per HBL support
+ALTER TABLE sea_hbls ADD COLUMN IF NOT EXISTS containers_json JSONB;

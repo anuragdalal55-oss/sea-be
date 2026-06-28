@@ -14,7 +14,7 @@ router.get('/', requireRole(['master_admin', 'admin']), async (req: AuthRequest,
       `SELECT u.id, u.username, u.full_name, u.email, u.role, u.is_active, u.created_at,
               u.password_plain,
               p.profile_code, p.company_name
-       FROM users u LEFT JOIN profiles p ON u.profile_id = p.id
+       FROM sea_users u LEFT JOIN sea_profiles p ON u.profile_id = p.id
        ORDER BY u.created_at DESC`
     );
     res.json(result.rows);
@@ -39,7 +39,7 @@ router.post('/register', requireRole(['master_admin', 'admin']), async (req: Aut
   try {
     const hash = await bcrypt.hash(password, 10);
     const result = await pool.query(
-      `INSERT INTO users (username, password_hash, password_plain, full_name, email, role, profile_id)
+      `INSERT INTO sea_users (username, password_hash, password_plain, full_name, email, role, profile_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, username, full_name, role`,
       [username, hash, password, full_name, email, role || 'user', profile_id || null]
     );
@@ -61,7 +61,7 @@ router.put('/:id', requireRole(['master_admin', 'admin']), async (req: AuthReque
   const { full_name, email, role, is_active, profile_id } = req.body;
   try {
     await pool.query(
-      `UPDATE users SET full_name=$1, email=$2, role=$3, is_active=$4, profile_id=$5, updated_at=NOW()
+      `UPDATE sea_users SET full_name=$1, email=$2, role=$3, is_active=$4, profile_id=$5, updated_at=NOW()
        WHERE id=$6`,
       [full_name, email, role, is_active, profile_id || null, req.params.id]
     );
@@ -78,7 +78,7 @@ router.put('/:id/location', requireRole(['master_admin', 'admin']), async (req: 
   const { customs_house_code } = req.body;
   try {
     await pool.query(
-      `UPDATE users SET customs_house_code=$1, updated_at=NOW() WHERE id=$2`,
+      `UPDATE sea_users SET customs_house_code=$1, updated_at=NOW() WHERE id=$2`,
       [customs_house_code || null, req.params.id]
     );
     logger.info('USERS', `Location updated: id=${req.params.id} by ${req.user?.username}`);
@@ -99,7 +99,7 @@ router.put('/:id/reset-password', requireRole(['master_admin', 'admin']), async 
   try {
     const hash = await bcrypt.hash(new_password, 10);
     await pool.query(
-      'UPDATE users SET password_hash=$1, password_plain=$2, updated_at=NOW() WHERE id=$3',
+      'UPDATE sea_users SET password_hash=$1, password_plain=$2, updated_at=NOW() WHERE id=$3',
       [hash, new_password, req.params.id]
     );
     logger.info('USERS', `Password reset for user id=${req.params.id} by ${req.user?.username}`);
@@ -113,7 +113,7 @@ router.put('/:id/reset-password', requireRole(['master_admin', 'admin']), async 
 // Delete user
 router.delete('/:id', requireRole(['master_admin']), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    await pool.query('UPDATE users SET is_active=FALSE WHERE id=$1', [req.params.id]);
+    await pool.query('UPDATE sea_users SET is_active=FALSE WHERE id=$1', [req.params.id]);
     logger.info('USERS', `User deactivated: id=${req.params.id} by ${req.user?.username}`);
     res.json({ message: 'Deactivated' });
   } catch (err) {
