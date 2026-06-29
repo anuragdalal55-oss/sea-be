@@ -27,6 +27,7 @@ const pool = new Pool({
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 15000,
+  family: 4, // force IPv4 — Render free tier cannot reach IPv6 hosts
   ...(isRemote ? { ssl: { rejectUnauthorized: false } } : {}),
 });
 
