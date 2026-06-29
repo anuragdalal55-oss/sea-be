@@ -29,6 +29,8 @@ type ContainerItem = {
   container_type: string | null;
   soc_flag: string | null;
   agent_code: string | null;
+  package_count: string | null;
+  weight: string | null;
 };
 
 type PreparedHblRow = {
@@ -84,15 +86,22 @@ function prepareHblRows(rows: any[], fallbackItemType: string | null): PreparedH
     const volumeCbm = cleanNumber(row?.volume_cbm) ?? 0;
     const cargoDescription = cleanText(row?.cargo_description);
 
-    // Build containers array: prefer new format, fall back to flat fields
-    const rawContainers: ContainerItem[] = Array.isArray(row?.containers) && row.containers.length > 0
-      ? row.containers.map((c: any) => ({
+    // Build containers array: prefer row.containers, then row.containers_json, then flat fields
+    const sourceContainers: any[] | null =
+      (Array.isArray(row?.containers) && row.containers.length > 0) ? row.containers :
+      (Array.isArray(row?.containers_json) && row.containers_json.length > 0) ? row.containers_json :
+      null;
+
+    const rawContainers: ContainerItem[] = sourceContainers
+      ? sourceContainers.map((c: any) => ({
           container_no: cleanText(c?.container_no),
           seal_no: cleanText(c?.seal_no),
           container_size: cleanText(c?.container_size),
           container_type: cleanText(c?.container_type),
           soc_flag: cleanText(c?.soc_flag),
           agent_code: cleanText(c?.agent_code),
+          package_count: c?.package_count != null && String(c.package_count) !== '' ? String(c.package_count) : null,
+          weight: c?.weight != null && String(c.weight) !== '' ? String(c.weight) : null,
         }))
       : [{
           container_no: cleanText(row?.container_no),
@@ -101,6 +110,8 @@ function prepareHblRows(rows: any[], fallbackItemType: string | null): PreparedH
           container_type: cleanText(row?.container_type),
           soc_flag: cleanText(row?.soc_flag),
           agent_code: cleanText(row?.agent_code),
+          package_count: null,
+          weight: null,
         }];
     const validContainers = rawContainers.filter(c => c.container_no);
     const firstContainer = validContainers[0] ?? rawContainers[0];
