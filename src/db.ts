@@ -29,7 +29,7 @@ const pool = new Pool({
   connectionTimeoutMillis: 15000,
   family: 4, // force IPv4 — Render free tier cannot reach IPv6 hosts
   ...(isRemote ? { ssl: { rejectUnauthorized: false } } : {}),
-});
+} as any);
 
 pool.on('connect', () => {
   logger.debug('DB', 'New client connected from pool');
