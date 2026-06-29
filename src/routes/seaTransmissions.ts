@@ -7,6 +7,25 @@ import { generateSeaCGM, generateSeaCGMFileName } from '../utils/seaCgmGenerator
 const router = Router();
 router.use(authenticate);
 
+// Extract just the port code from "(CODE) -- NAME" format, or return value as-is
+function extractPortCode(val: string | null | undefined): string {
+  if (!val) return '';
+  const m = val.match(/^\(([^)]+)\)\s*--\s*.+$/);
+  return m ? m[1] : val;
+}
+
+// Handle containers_json stored as TEXT (JSON.stringify) or JSONB (parsed array)
+function parseContainersJson(val: any): any[] | undefined {
+  if (Array.isArray(val) && val.length > 0) return val;
+  if (typeof val === 'string' && val.trim()) {
+    try {
+      const p = JSON.parse(val);
+      return Array.isArray(p) && p.length > 0 ? p : undefined;
+    } catch { return undefined; }
+  }
+  return undefined;
+}
+
 // ── Profile resolution (4-level cascade) ──────────────────────────────────────
 // 1. MBL's profile_id  2. creator + location  3. req.user + location  4. location only
 async function resolveProfile(mblRow: any, userId: string, chc: string) {
@@ -108,11 +127,22 @@ router.post('/generate/:id', async (req: AuthRequest, res: Response): Promise<vo
     const fileName = generateSeaCGMFileName(chc, carnNumber, userPrefix, controlNum);
     const controlNumber = `${userPrefix.replace(/\s+/g, '').substring(0, 3).toUpperCase()}${String(controlNum).padStart(4, '0')}`;
 
-    // Attach containers from containers_json to each HBL row for the CGM generator
-    const hblRows = hblResult.rows.map((h: any) => ({
-      ...h,
-      containers: Array.isArray(h.containers_json) && h.containers_json.length > 0 ? h.containers_json : undefined,
-    }));
+    // Attach containers and strip legacy "(CODE) -- NAME" port format for CGM generator
+    const hblRows = hblResult.rows.map((h: any) => {
+      const parsed = parseContainersJson(h.containers_json);
+      console.log('[CGM-DEBUG] HBL', h.hbl_no,
+        '| containers_json type:', typeof h.containers_json,
+        '| isArray:', Array.isArray(h.containers_json),
+        '| raw:', JSON.stringify(h.containers_json)?.substring(0, 200),
+        '| parsed length:', parsed?.length ?? 'undefined',
+        '| flat container_no:', h.container_no,
+      );
+      return {
+        ...h,
+        port_of_delivery: extractPortCode(h.port_of_delivery),
+        containers: parsed,
+      };
+    });
 
     const fileContent = generateSeaCGM(
       {
@@ -127,8 +157,8 @@ router.post('/generate/:id', async (req: AuthRequest, res: Response): Promise<vo
         vessel_name:      mbl.vessel_name,
         shipping_line:    mbl.shipping_line,
         line_no:          mbl.line_no,
-        port_of_loading:  mbl.port_of_loading,
-        port_of_unloading: mbl.port_of_unloading,
+        port_of_loading:  extractPortCode(mbl.port_of_loading),
+        port_of_unloading: extractPortCode(mbl.port_of_unloading),
         customs_house_code: chc,
         carn_number:      carnNumber,
         icegate_code:     profile.icegate_code,

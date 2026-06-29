@@ -201,13 +201,14 @@ export function generateSeaCGM(
   const contLines: string[] = [];
   hbls.forEach((hbl, i) => {
     const subline = hbl.subline_no || String(i + 1);
-    const containerList = hbl.containers && hbl.containers.length > 0
-      ? hbl.containers
+    // Only use containers_json entries that have a real container_no; fall back to flat field
+    const validFromJson = (hbl.containers || []).filter((c: any) => c && c.container_no);
+    const containerList = validFromJson.length > 0
+      ? validFromJson
       : (hbl.container_no
           ? [{ container_no: hbl.container_no, seal_no: hbl.seal_no, container_size: hbl.container_size, container_type: hbl.container_type, soc_flag: hbl.soc_flag, agent_code: hbl.agent_code }]
           : []);
     containerList.forEach(ct => {
-      if (!ct.container_no) return;
       const ctPkg    = String(parseInt(String((ct as any).package_count ?? hbl.package_count ?? 0), 10) || 0);
       const ctWeight = parseFloat(String((ct as any).weight ?? hbl.gross_weight ?? 0)).toFixed(3);
       contLines.push([
