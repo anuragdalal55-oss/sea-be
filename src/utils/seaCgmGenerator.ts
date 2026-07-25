@@ -5,6 +5,8 @@
  * Sections: <conscargo> (per HBL) + <conscont> (per container)
  */
 
+import { roundContainerWeight } from './numberUtils';
+
 const GS = '\x1d';
 
 export interface SeaMblData {
@@ -182,7 +184,7 @@ export function generateSeaCGM(
       hbl.dest_cfs         || '',                                           // 28. destination cfs
       String(parseInt(String(hbl.package_count ?? 0), 10) || 0),           // 29. package
       pkgType,                                                              // 30. package code
-      parseFloat(String(hbl.gross_weight ?? 0)).toFixed(3),                // 31. weight
+      parseFloat(String(hbl.gross_weight ?? 0)).toFixed(2),                // 31. weight
       'KGS',                                                                // 32. weight unit
       '',                                                                   // 33. empty
       '',                                                                   // 34. empty
@@ -210,7 +212,7 @@ export function generateSeaCGM(
           : []);
     containerList.forEach(ct => {
       const ctPkg    = String(parseInt(String((ct as any).package_count ?? hbl.package_count ?? 0), 10) || 0);
-      const ctWeight = parseFloat(String((ct as any).weight ?? hbl.gross_weight ?? 0)).toFixed(3);
+      const ctWeight = roundContainerWeight((ct as any).weight ?? hbl.gross_weight ?? 0) ?? '0.00';
       contLines.push([
         msgType,                       // 1.  F
         chc,                           // 2.  login location

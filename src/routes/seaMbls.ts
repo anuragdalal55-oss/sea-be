@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import pool from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { logger } from '../utils/logger';
+import { roundContainerWeight } from '../utils/numberUtils';
 
 const router = Router();
 router.use(authenticate);
@@ -101,7 +102,7 @@ function prepareHblRows(rows: any[], fallbackItemType: string | null): PreparedH
           soc_flag: cleanText(c?.soc_flag),
           agent_code: cleanText(c?.agent_code),
           package_count: c?.package_count != null && String(c.package_count) !== '' ? String(c.package_count) : null,
-          weight: c?.weight != null && String(c.weight) !== '' ? String(c.weight) : null,
+          weight: roundContainerWeight(c?.weight),
         }))
       : [{
           container_no: cleanText(row?.container_no),
@@ -415,7 +416,7 @@ async function saveMbl(req: AuthRequest, res: Response, mode: 'create' | 'update
           carrier_name=$28, carrier_code=$29, mlo_name=$30, mlo_code=$31,
           total_packages=$32, total_gross_weight=$33, total_volume_cbm=$34,
           customs_house_code=$35, profile_id=$36,
-          updated_at=NOW()
+          status='draft', updated_at=NOW()
         WHERE id=$37`,
         [...mblValues, req.params.id]
       );

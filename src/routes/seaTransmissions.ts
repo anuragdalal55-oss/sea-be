@@ -175,6 +175,12 @@ router.post('/generate/:id', async (req: AuthRequest, res: Response): Promise<vo
       [req.params.id, fileName, fileContent, req.user!.id]
     );
 
+    // File has been downloaded/submitted — remove it from the Pending (draft) list until it's edited again
+    await client.query(
+      `UPDATE sea_mbls SET status='submitted', updated_at=NOW() WHERE id = $1`,
+      [req.params.id]
+    );
+
     logger.info('SEA_TX', `Generated CGM ${fileName} for MBL ${mbl.mbl_no}`);
     res.json({ fileName, fileContent });
   } catch (error) {
@@ -188,18 +194,30 @@ router.post('/generate/:id', async (req: AuthRequest, res: Response): Promise<vo
 // ── GET / — transmission history ──────────────────────────────────────────────
 router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
   const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
+  const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+  const pageSize = Math.max(1, parseInt(String(req.query.pageSize || '50'), 10) || 50);
+  const offset = (page - 1) * pageSize;
   try {
+    const where = isAdmin ? '' : 'WHERE t.created_by = $1';
+    const baseParams = isAdmin ? [] : [req.user?.id];
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM sea_transmissions t ${where}`,
+      baseParams
+    );
+    const total = parseInt(countResult.rows[0].count, 10);
+
     const result = await pool.query(
       `SELECT t.*, m.mbl_no, u.username
        FROM sea_transmissions t
        LEFT JOIN sea_mbls m ON m.id = t.sea_mbl_id
        LEFT JOIN sea_users u ON u.id = t.created_by
-       ${isAdmin ? '' : 'WHERE t.created_by = $1'}
+       ${where}
        ORDER BY t.created_at DESC
-       LIMIT 100`,
-      isAdmin ? [] : [req.user?.id]
+       LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}`,
+      [...baseParams, pageSize, offset]
     );
-    res.json(result.rows);
+    res.json({ data: result.rows, total });
   } catch (error) {
     logger.error('SEA_TX', 'GET / error', error);
     res.status(500).json({ message: 'Failed to load sea transmission history' });

@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import pool from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { logger } from '../utils/logger';
+import { roundContainerWeight } from '../utils/numberUtils';
 
 const router = Router();
 router.use(authenticate);
@@ -124,7 +125,10 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     const resolvedContainerType = cleanText(firstCt?.container_type ?? container_type);
     const resolvedSocFlag = cleanText(firstCt?.soc_flag ?? soc_flag);
     const resolvedAgentCode = cleanText(firstCt?.agent_code ?? agent_code);
-    const containersJson = Array.isArray(containers) ? JSON.stringify(containers) : null;
+    const roundedContainers = Array.isArray(containers)
+      ? containers.map((c: any) => ({ ...c, weight: roundContainerWeight(c?.weight) }))
+      : null;
+    const containersJson = roundedContainers ? JSON.stringify(roundedContainers) : null;
 
     const result = await pool.query(
       `UPDATE sea_hbls SET
@@ -155,6 +159,13 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
         containersJson,
         req.params.id,
       ]
+    );
+
+    // Editing an HBL means the file must be resubmitted — send the parent MBL back to draft
+    await pool.query(
+      `UPDATE sea_mbls SET status='draft', updated_at=NOW()
+       WHERE id = (SELECT mbl_id FROM sea_hbls WHERE id = $1)`,
+      [req.params.id]
     );
 
     logger.info('SEA_HBLS', `Updated HBL id=${req.params.id}`);

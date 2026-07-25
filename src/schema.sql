@@ -835,3 +835,11 @@ INSERT INTO sea_delivery_ports (port_code, port_name) VALUES
   ('INBHU1', 'Bhavnagar'),
   ('INALA1', 'Alang')
 ON CONFLICT (port_code) DO NOTHING;
+
+-- Location scoping for MLO/Carrier masters.
+-- location_codes stores sea_locations.customs_house_code values.
+-- NULL/empty array = unrestricted (visible from every location) — keeps all
+-- existing rows working unchanged with no backfill needed. Populated going
+-- forward via the MLO/Carrier master pages' location multi-select.
+ALTER TABLE sea_mlos ADD COLUMN IF NOT EXISTS location_codes TEXT[];
+ALTER TABLE sea_carriers ADD COLUMN IF NOT EXISTS location_codes TEXT[];
