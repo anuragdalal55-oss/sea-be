@@ -475,13 +475,18 @@ router.put('/:id', (req: AuthRequest, res: Response) => saveMbl(req, res, 'updat
 router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
   try {
-    const result = await pool.query(
-      isAdmin
-        ? 'DELETE FROM sea_mbls WHERE id = $1 RETURNING id'
-        : 'DELETE FROM sea_mbls WHERE id = $1 AND created_by = $2 RETURNING id',
-      isAdmin ? [req.params.id] : [req.params.id, req.user?.id]
-    );
-    if (result.rows.length === 0) { res.status(404).json({ message: 'Sea MBL not found or not allowed' }); return; }
+    const existing = await pool.query('SELECT id, status, created_by FROM sea_mbls WHERE id = $1', [req.params.id]);
+    if (existing.rows.length === 0) { res.status(404).json({ message: 'Sea MBL not found' }); return; }
+
+    const record = existing.rows[0];
+    if (!isAdmin && record.created_by !== req.user?.id) {
+      res.status(403).json({ message: 'You cannot delete this record' }); return;
+    }
+    if (record.status !== 'draft') {
+      res.status(400).json({ message: 'Only draft MBLs can be deleted. This MBL has already been submitted.' }); return;
+    }
+
+    await pool.query('DELETE FROM sea_mbls WHERE id = $1', [req.params.id]);
     logger.info('SEA_MBLS', `Deleted MBL id=${req.params.id}`);
     res.json({ message: 'Deleted' });
   } catch (error) {

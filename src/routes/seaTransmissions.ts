@@ -191,31 +191,77 @@ router.post('/generate/:id', async (req: AuthRequest, res: Response): Promise<vo
   }
 });
 
-// ── GET / — transmission history ──────────────────────────────────────────────
+// ── GET /users — users who have submitted transmissions (for filter dropdown) ─
+router.get('/users', async (req: AuthRequest, res: Response): Promise<void> => {
+  const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
+  if (!isAdmin) { res.status(403).json({ message: 'Forbidden' }); return; }
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT u.id, u.username
+       FROM sea_users u
+       INNER JOIN sea_transmissions t ON t.created_by = u.id
+       ORDER BY u.username`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    logger.error('SEA_TX', 'GET /users error', error);
+    res.status(500).json({ message: 'Failed to load users' });
+  }
+});
+
+// ── GET / — transmission history (Submission Report / Account Statement) ──────
 router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
   const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
   const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
   const pageSize = Math.max(1, parseInt(String(req.query.pageSize || '50'), 10) || 50);
   const offset = (page - 1) * pageSize;
-  try {
-    const where = isAdmin ? '' : 'WHERE t.created_by = $1';
-    const baseParams = isAdmin ? [] : [req.user?.id];
+  const exportAll = req.query.export === 'true';
+  const { from_date, to_date } = req.query;
+  const userId = isAdmin ? String(req.query.user_id || '').trim() : req.user?.id;
 
-    const countResult = await pool.query(
-      `SELECT COUNT(*) FROM sea_transmissions t ${where}`,
-      baseParams
-    );
+  try {
+    const params: any[] = [];
+    const conditions: string[] = [];
+    let idx = 1;
+
+    if (userId) { params.push(userId); conditions.push(`t.created_by = $${idx++}`); }
+    if (from_date) { params.push(from_date); conditions.push(`t.created_at >= $${idx++}`); }
+    if (to_date) { params.push(`${to_date} 23:59:59`); conditions.push(`t.created_at <= $${idx++}`); }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const base = `
+      FROM sea_transmissions t
+      LEFT JOIN sea_mbls m ON m.id = t.sea_mbl_id
+      LEFT JOIN sea_locations loc ON loc.customs_house_code = m.customs_house_code
+      LEFT JOIN sea_users u ON u.id = t.created_by
+      ${where}`;
+
+    const selectCols = `
+      SELECT t.id, t.file_name, t.status, t.created_at,
+             m.mbl_no, m.vessel_date,
+             COALESCE(NULLIF(loc.city_name, ''), m.customs_house_code) AS port_of_discharge,
+             u.username,
+             (SELECT COUNT(*) FROM sea_hbls h WHERE h.mbl_id = m.id) AS hbl_count,
+             COALESCE((
+               SELECT json_agg(json_build_object('hbl_no', h.hbl_no, 'port_of_delivery', h.port_of_delivery) ORDER BY h.sort_order, h.created_at)
+               FROM sea_hbls h WHERE h.mbl_id = m.id
+             ), '[]'::json) AS hbls`;
+
+    if (exportAll) {
+      const result = await pool.query(`${selectCols} ${base} ORDER BY t.created_at DESC`, params);
+      res.json(result.rows);
+      return;
+    }
+
+    const countResult = await pool.query(`SELECT COUNT(*) ${base}`, params);
     const total = parseInt(countResult.rows[0].count, 10);
 
     const result = await pool.query(
-      `SELECT t.*, m.mbl_no, u.username
-       FROM sea_transmissions t
-       LEFT JOIN sea_mbls m ON m.id = t.sea_mbl_id
-       LEFT JOIN sea_users u ON u.id = t.created_by
-       ${where}
+      `${selectCols} ${base}
        ORDER BY t.created_at DESC
-       LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}`,
-      [...baseParams, pageSize, offset]
+       LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...params, pageSize, offset]
     );
     res.json({ data: result.rows, total });
   } catch (error) {
