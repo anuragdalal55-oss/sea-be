@@ -181,4 +181,62 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   }
 });
 
+router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const isAdmin = req.user?.role === 'master_admin' || req.user?.role === 'admin';
+  const client = await pool.connect();
+  let txStarted = false;
+
+  try {
+    const existing = await client.query(
+      `SELECT h.id, h.mbl_id, m.created_by FROM sea_hbls h INNER JOIN sea_mbls m ON m.id = h.mbl_id WHERE h.id = $1`,
+      [req.params.id]
+    );
+    if (existing.rows.length === 0) { res.status(404).json({ message: 'HBL not found' }); return; }
+    if (!isAdmin && existing.rows[0].created_by !== req.user?.id) {
+      res.status(403).json({ message: 'You cannot delete this record' }); return;
+    }
+    const mblId = existing.rows[0].mbl_id;
+
+    await client.query('BEGIN');
+    txStarted = true;
+
+    await client.query('DELETE FROM sea_hbls WHERE id = $1', [req.params.id]);
+
+    // Close the gap left by the deleted row so subline numbers stay contiguous (1, 2, 3, ...)
+    const remaining = await client.query(
+      `SELECT id FROM sea_hbls WHERE mbl_id = $1 ORDER BY sort_order ASC, created_at ASC`,
+      [mblId]
+    );
+    for (let i = 0; i < remaining.rows.length; i++) {
+      await client.query(
+        `UPDATE sea_hbls SET subline_no = $1, sort_order = $2 WHERE id = $3`,
+        [String(i + 1), i + 1, remaining.rows[i].id]
+      );
+    }
+
+    await client.query(
+      `UPDATE sea_mbls SET
+         status = 'draft',
+         total_packages = COALESCE((SELECT SUM(package_count) FROM sea_hbls WHERE mbl_id = $1), 0),
+         total_gross_weight = COALESCE((SELECT SUM(gross_weight) FROM sea_hbls WHERE mbl_id = $1), 0),
+         total_volume_cbm = COALESCE((SELECT SUM(volume_cbm) FROM sea_hbls WHERE mbl_id = $1), 0),
+         updated_at = NOW()
+       WHERE id = $1`,
+      [mblId]
+    );
+
+    await client.query('COMMIT');
+    txStarted = false;
+
+    logger.info('SEA_HBLS', `Deleted HBL id=${req.params.id}`);
+    res.json({ message: 'Deleted' });
+  } catch (error) {
+    if (txStarted) await client.query('ROLLBACK');
+    logger.error('SEA_HBLS', `DELETE /${req.params.id} error`, error);
+    res.status(500).json({ message: 'Failed to delete HBL record' });
+  } finally {
+    client.release();
+  }
+});
+
 export default router;

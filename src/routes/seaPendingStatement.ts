@@ -48,7 +48,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
          m.id,
          m.mbl_no,
          m.vessel_date,
-         COALESCE(NULLIF(lp.port_name, ''), m.port_of_loading) AS gateway_port,
+         COALESCE(NULLIF(loc.city_name, ''), m.customs_house_code) AS gateway_port,
          m.vessel_name,
          m.description AS remarks,
          m.created_at,
@@ -57,7 +57,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
          h.port_of_delivery AS delivery_port
        FROM sea_mbls m
        LEFT JOIN sea_users u ON u.id = m.created_by
-       LEFT JOIN sea_loading_ports lp ON lp.port_code = m.port_of_loading
+       LEFT JOIN sea_locations loc ON loc.customs_house_code = m.customs_house_code
        LEFT JOIN LATERAL (
          SELECT port_of_delivery FROM sea_hbls
          WHERE mbl_id = m.id
@@ -65,7 +65,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
          LIMIT 1
        ) h ON TRUE
        ${where}
-       ORDER BY m.created_at DESC
+       ORDER BY m.vessel_date DESC NULLS LAST, m.created_at DESC
        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, pageSize, offset]
     );
