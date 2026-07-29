@@ -65,7 +65,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
          LIMIT 1
        ) h ON TRUE
        ${where}
-       ORDER BY m.vessel_date DESC NULLS LAST, m.created_at DESC
+       ORDER BY m.vessel_date ASC NULLS FIRST, m.created_at DESC
        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, pageSize, offset]
     );
