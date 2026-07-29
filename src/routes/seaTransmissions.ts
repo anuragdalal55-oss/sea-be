@@ -27,11 +27,17 @@ function parseContainersJson(val: any): any[] | undefined {
 }
 
 // ── Profile resolution (4-level cascade) ──────────────────────────────────────
-// 1. MBL's profile_id  2. creator + location  3. req.user + location  4. location only
+// 1. MBL's profile_id (only if it belongs to the MBL's creator)  2. creator + location
+// 3. req.user + location  4. location only
 async function resolveProfile(mblRow: any, userId: string, chc: string) {
   if (mblRow.profile_id) {
     const r = await pool.query('SELECT * FROM sea_profiles WHERE id = $1', [mblRow.profile_id]);
-    if (r.rows.length) return r.rows[0];
+    // Only trust the stored profile_id if it's actually owned by whoever created this MBL —
+    // otherwise a stale/wrong profile_id (e.g. pointing at an unrelated default/admin profile)
+    // would silently override the correct company's PAN/CARN/icegate details.
+    if (r.rows.length && (!mblRow.created_by || r.rows[0].user_id === mblRow.created_by)) {
+      return r.rows[0];
+    }
   }
   if (mblRow.created_by) {
     const r = await pool.query(
@@ -83,7 +89,7 @@ router.post('/generate/:id', async (req: AuthRequest, res: Response): Promise<vo
   try {
     const mblResult = await client.query(
       `SELECT m.*, p.carn_number, p.icegate_code, p.user_prefix, p.consol_agent_id,
-              p.profile_code, p.company_name, p.customs_house_code AS profile_chc
+              p.profile_code, p.company_name, p.customs_house_code AS profile_chc, p.user_id AS profile_user_id
        FROM sea_mbls m
        LEFT JOIN sea_profiles p ON p.id = m.profile_id
        WHERE m.id = $1`,
@@ -98,9 +104,10 @@ router.post('/generate/:id', async (req: AuthRequest, res: Response): Promise<vo
     const mbl = mblResult.rows[0];
     const chc = mbl.customs_house_code || '';
 
-    // Profile resolution
+    // Profile resolution — only trust the joined profile_id if it's actually owned by
+    // whoever created this MBL, otherwise fall through to the location/creator cascade.
     let profile = null;
-    if (mbl.carn_number) {
+    if (mbl.carn_number && (!mbl.created_by || mbl.profile_user_id === mbl.created_by)) {
       profile = mbl; // profile data already joined
     } else {
       profile = await resolveProfile(mbl, req.user!.id, chc);
